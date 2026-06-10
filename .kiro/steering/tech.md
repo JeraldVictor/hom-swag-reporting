@@ -34,7 +34,8 @@
 | `REPORTING_EVENT_TOPIC` | `homswag.reporting.events` | Status event topic |
 | `REPORTING_DEAD_LETTER_TOPIC` | `homswag.reporting.dead-letter` | Dead-letter topic |
 | `REPORTING_CONSUMER_GROUP` | `homswag-reporting-workers` | Kafka consumer group |
-| `MINIO_ENDPOINT` | `127.0.0.1:9000` | MinIO endpoint |
+| `MINIO_ENDPOINT` | `127.0.0.1:9000` | MinIO endpoint; include port or set `MINIO_PORT` separately |
+| `MINIO_PORT` | empty | Optional MinIO port appended when `MINIO_ENDPOINT` has no port |
 | `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key |
 | `MINIO_SECRET_KEY` | `minioadmin` | MinIO secret key |
 | `MINIO_USE_SSL` | `false` | MinIO TLS toggle |

@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"net"
 	"os"
 	"strconv"
 )
@@ -35,7 +36,7 @@ func Load() *Config {
 		EventTopic:      getEnv("REPORTING_EVENT_TOPIC", "homswag.reporting.events"),
 		DeadLetterTopic: getEnv("REPORTING_DEAD_LETTER_TOPIC", "homswag.reporting.dead-letter"),
 		ConsumerGroup:   getEnv("REPORTING_CONSUMER_GROUP", "homswag-reporting-workers"),
-		MinIOEndpoint:   getEnv("MINIO_ENDPOINT", "127.0.0.1:9000"),
+		MinIOEndpoint:   getMinIOEndpoint(),
 		MinIOAccessKey:  getEnv("MINIO_ACCESS_KEY", "minioadmin"),
 		MinIOSecretKey:  getEnv("MINIO_SECRET_KEY", "minioadmin"),
 		MinIOUseSSL:     getEnvBool("MINIO_USE_SSL", false),
@@ -44,6 +45,20 @@ func Load() *Config {
 		JobTTLDays:      getEnvInt("REPORTING_JOB_TTL_DAYS", 30),
 		SignedURLTTL:    getEnvInt("REPORTING_SIGNED_URL_TTL_SECONDS", 900),
 	}
+}
+
+func getMinIOEndpoint() string {
+	endpoint := getEnv("MINIO_ENDPOINT", "127.0.0.1:9000")
+	if _, _, err := net.SplitHostPort(endpoint); err == nil {
+		return endpoint
+	}
+
+	port := getEnv("MINIO_PORT", "")
+	if port == "" {
+		return endpoint
+	}
+
+	return net.JoinHostPort(endpoint, port)
 }
 
 func getEnv(key, fallback string) string {
