@@ -3,10 +3,10 @@ package static
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -40,8 +40,14 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	startDateStr := req.Parameters["start_date"].(string)
 	endDateStr := req.Parameters["end_date"].(string)
 
-	startDate, _ := time.Parse(time.RFC3339, startDateStr)
-	endDate, _ := time.Parse(time.RFC3339, endDateStr)
+	startDate, err := parseReportDate(startDateStr, false)
+	if err != nil {
+		return fmt.Errorf("invalid start_date: %w", err)
+	}
+	endDate, err := parseReportDate(endDateStr, true)
+	if err != nil {
+		return fmt.Errorf("invalid end_date: %w", err)
+	}
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
@@ -54,9 +60,23 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
-			"total_commission": bson.M{"$sum": "$beautician_commission"},
-			"total_revenue":    bson.M{"$sum": "$revenue"},
-			"order_count":      bson.M{"$sum": 1},
+			"total_commission": bson.M{
+				"$sum": bson.M{
+					"$ifNull": bson.A{
+						"$commission_details.total_commission",
+						"$beautician_commission",
+					},
+				},
+			},
+			"total_revenue": bson.M{
+				"$sum": bson.M{
+					"$ifNull": bson.A{
+						"$order_cost",
+						"$revenue",
+					},
+				},
+			},
+			"order_count": bson.M{"$sum": 1},
 		}}},
 		{{Key: "$lookup", Value: bson.M{
 			"from":         "beauticians",
@@ -65,14 +85,21 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			"as":           "beautician",
 		}}},
 		{{Key: "$unwind", Value: "$beautician"}},
-		{{Key: "$project", Value: bson.M{
-			"name":             "$beautician.name",
-			"emp_code":         "$beautician.emp_code",
-			"total_commission": 1,
-			"total_revenue":    1,
-			"order_count":      1,
-		}}},
 	}
+
+	if officeIDStr, ok := req.Parameters["office_id"].(string); ok && officeIDStr != "" {
+		if officeID, err := primitive.ObjectIDFromHex(officeIDStr); err == nil {
+			pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{"beautician.office_id": officeID}}})
+		}
+	}
+
+	pipeline = append(pipeline, bson.D{{Key: "$project", Value: bson.M{
+		"name":             "$beautician.name",
+		"emp_code":         "$beautician.emp_code",
+		"total_commission": 1,
+		"total_revenue":    1,
+		"order_count":      1,
+	}}})
 
 	if req.Limit > 0 {
 		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: req.Limit}})

@@ -23,6 +23,7 @@ import (
 type PreviewRequest struct {
 	ReportKey  string                 `json:"report_key"`
 	Version    int                    `json:"version"`
+	OfficeID   string                 `json:"office_id,omitempty"`
 	Parameters map[string]interface{} `json:"parameters"`
 	Limit      int                    `json:"limit"`
 }
@@ -118,10 +119,18 @@ func main() {
 			return
 		}
 
+		parameters := make(map[string]interface{}, len(req.Parameters)+1)
+		for key, value := range req.Parameters {
+			parameters[key] = value
+		}
+		if req.OfficeID != "" {
+			parameters["office_id"] = req.OfficeID
+		}
+
 		reportReq := reports.Request{
 			ReportKey:  req.ReportKey,
 			Version:    req.Version,
-			Parameters: req.Parameters,
+			Parameters: parameters,
 			Limit:      req.Limit,
 		}
 

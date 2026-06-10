@@ -24,18 +24,18 @@ type ReportRequest struct {
 }
 
 type ReportStatusEvent struct {
-	EventID       string              `json:"event_id"`
-	EventType     string              `json:"event_type"`
-	SchemaVersion int                 `json:"schema_version"`
-	JobID         primitive.ObjectID  `json:"job_id"`
-	Status        string              `json:"status"`
-	Stage         string              `json:"stage"`
-	Percent       int                 `json:"percent"`
-	Message       string              `json:"message"`
-	File          *FileEventMetadata  `json:"file,omitempty"`
-	Error         *JobErrorEvent      `json:"error,omitempty"`
-	TraceID       string              `json:"trace_id"`
-	CreatedAt     time.Time           `json:"created_at"`
+	EventID       string             `json:"event_id"`
+	EventType     string             `json:"event_type"`
+	SchemaVersion int                `json:"schema_version"`
+	JobID         primitive.ObjectID `json:"job_id"`
+	Status        string             `json:"status"`
+	Stage         string             `json:"stage"`
+	Percent       int                `json:"percent"`
+	Message       string             `json:"message"`
+	File          *FileEventMetadata `json:"file,omitempty"`
+	Error         *JobErrorEvent     `json:"error,omitempty"`
+	TraceID       string             `json:"trace_id"`
+	CreatedAt     time.Time          `json:"created_at"`
 }
 
 type FileEventMetadata struct {
@@ -45,6 +45,7 @@ type FileEventMetadata struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	SizeBytes   int64  `json:"size_bytes"`
+	ExpiresAt   string `json:"expires_at,omitempty"`
 }
 
 type JobErrorEvent struct {

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/kafka"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/minio"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/mongo"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/render"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
+	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -87,7 +87,7 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 	os.MkdirAll(tempDir, 0755)
 	filename := fmt.Sprintf("%s_%s.%s", req.ReportKey, req.JobID.Hex(), strings.ToLower(req.Format))
 	tempFilePath := filepath.Join(tempDir, filename)
-	
+
 	f, err := os.Create(tempFilePath)
 	if err != nil {
 		w.handleError(ctx, req.JobID, "TEMP_FILE_ERROR", err.Error(), req.TraceID)
@@ -99,6 +99,7 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 	var sink reports.RowSink
 	var contentType string
 	var xlsxWriter *render.XLSXWriter
+	var pdfWriter *render.PDFWriter
 
 	if req.Format == "CSV" {
 		csvWriter := render.NewCSVWriter(f)
@@ -110,18 +111,30 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 		defer xlsxWriter.Close()
 		sink = xlsxWriter
 		contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	} else if req.Format == "PDF" {
+		pdfWriter = render.NewPDFWriter()
+		sink = pdfWriter
+		contentType = "application/pdf"
 	} else {
-		w.handleError(ctx, req.JobID, "UNSUPPORTED_FORMAT", "Only CSV and XLSX are currently supported", req.TraceID)
+		w.handleError(ctx, req.JobID, "UNSUPPORTED_FORMAT", "Only CSV, XLSX, and PDF are currently supported", req.TraceID)
 		return
 	}
 
 	w.sendStatus(ctx, req.JobID, "PROCESSING", "querying", 30, "Executing query", nil, nil, req.TraceID)
 
+	parameters := make(map[string]interface{}, len(req.Parameters)+1)
+	for key, value := range req.Parameters {
+		parameters[key] = value
+	}
+	if req.OfficeID != nil {
+		parameters["office_id"] = req.OfficeID.Hex()
+	}
+
 	reportReq := reports.Request{
 		ReportKey:  req.ReportKey,
 		Version:    req.ReportVersion,
 		Format:     req.Format,
-		Parameters: req.Parameters,
+		Parameters: parameters,
 	}
 
 	if err := executor.Run(ctx, reportReq, sink); err != nil {
@@ -140,6 +153,15 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 			w.handleError(ctx, req.JobID, "XLSX_WRITE_ERROR", err.Error(), req.TraceID)
 			return
 		}
+	} else if req.Format == "PDF" {
+		reportTitle := req.ReportKey
+		if name, ok := req.DefinitionSnapshot["name"].(string); ok && name != "" {
+			reportTitle = name
+		}
+		if err := pdfWriter.WriteTo(f, reportTitle); err != nil {
+			w.handleError(ctx, req.JobID, "PDF_WRITE_ERROR", err.Error(), req.TraceID)
+			return
+		}
 	}
 
 	// 4. Upload to MinIO
@@ -147,10 +169,11 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 
 	f.Seek(0, 0)
 	stat, _ := f.Stat()
-	
+
 	now := time.Now()
+	expiresAt := now.AddDate(0, 1, 0)
 	objectKey := fmt.Sprintf("reports/%d/%02d/%s/%s", now.Year(), now.Month(), req.JobID.Hex(), filename)
-	
+
 	uploadInfo, err := w.MinioClient.UploadFile(ctx, objectKey, f, stat.Size(), contentType)
 	if err != nil {
 		w.handleError(ctx, req.JobID, "UPLOAD_ERROR", err.Error(), req.TraceID)
@@ -164,6 +187,7 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 		Filename:    filename,
 		ContentType: contentType,
 		SizeBytes:   uploadInfo.Size,
+		ExpiresAt:   expiresAt.Format(time.RFC3339),
 	}
 
 	// 5. Update status to COMPLETED
