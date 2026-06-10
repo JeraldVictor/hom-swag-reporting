@@ -10,6 +10,7 @@ type Request struct {
 	Version    int
 	Format     string
 	Parameters map[string]interface{}
+	Limit      int
 }
 
 type RowSink interface {

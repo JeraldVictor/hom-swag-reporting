@@ -62,6 +62,10 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 		{{Key: "$sort", Value: bson.M{"_id": 1}}},
 	}
 
+	if req.Limit > 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: req.Limit}})
+	}
+
 	cursor, err := e.db.Collection("orders").Aggregate(ctx, pipeline)
 	if err != nil {
 		return err

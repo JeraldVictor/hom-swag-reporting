@@ -27,15 +27,15 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		Port:            getEnv("PORT", "8080"),
-		MongoDBURI:      getEnv("MONGODB_URI", "mongodb://localhost:27017/homswag"),
+		Port:            getEnv("PORT", "3003"),
+		MongoDBURI:      getEnv("MONGODB_URI", "mongodb://admin:password@127.0.0.1:27017/homswag?authSource=admin"),
 		MongoDatabase:   getEnv("MONGO_DATABASE", "homswag"),
-		KafkaBrokers:    getEnv("KAFKA_BROKERS", "localhost:9092"),
+		KafkaBrokers:    getEnv("KAFKA_BROKERS", "127.0.0.1:9094"),
 		RequestTopic:    getEnv("REPORTING_REQUEST_TOPIC", "homswag.reporting.requests"),
 		EventTopic:      getEnv("REPORTING_EVENT_TOPIC", "homswag.reporting.events"),
 		DeadLetterTopic: getEnv("REPORTING_DEAD_LETTER_TOPIC", "homswag.reporting.dead-letter"),
 		ConsumerGroup:   getEnv("REPORTING_CONSUMER_GROUP", "homswag-reporting-workers"),
-		MinIOEndpoint:   getEnv("MINIO_ENDPOINT", "localhost:9000"),
+		MinIOEndpoint:   getEnv("MINIO_ENDPOINT", "127.0.0.1:9000"),
 		MinIOAccessKey:  getEnv("MINIO_ACCESS_KEY", "minioadmin"),
 		MinIOSecretKey:  getEnv("MINIO_SECRET_KEY", "minioadmin"),
 		MinIOUseSSL:     getEnvBool("MINIO_USE_SSL", false),

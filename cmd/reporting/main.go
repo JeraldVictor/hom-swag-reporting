@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -19,24 +20,39 @@ import (
 	"github.com/joho/godotenv"
 )
 
+type PreviewRequest struct {
+	ReportKey  string                 `json:"report_key"`
+	Version    int                    `json:"version"`
+	Parameters map[string]interface{} `json:"parameters"`
+	Limit      int                    `json:"limit"`
+}
+
+type PreviewResponse struct {
+	Rows [][]interface{} `json:"rows"`
+}
+
+type MemorySink struct {
+	Rows [][]interface{}
+}
+
+func (s *MemorySink) WriteRow(row []interface{}) error {
+	s.Rows = append(s.Rows, row)
+	return nil
+}
+
 func main() {
 	// Load environment variables from .env file if it exists
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using environment variables")
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	// Initialize components (Config, Mongo, Kafka, MinIO)
+	cfg := config.Load()
+	log.Println("Initializing HomSwag Reporting Service...")
 
 	// Create a context that is cancelled when we receive a termination signal
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// Initialize components (Config, Mongo, Kafka, MinIO)
-	cfg := config.Load()
-	log.Println("Initializing HomSwag Reporting Service...")
 
 	// Connect to MongoDB
 	mongoClient, err := mongo.Connect(ctx, cfg.MongoDBURI, cfg.MongoDatabase)
@@ -73,12 +89,50 @@ func main() {
 	// Initialize Worker
 	worker := jobs.NewWorker(mongoClient, minioClient, consumer, eventProducer, deadLetterProducer, registry)
 
-	// Start health check server
+	// Start health check and preview server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		// Basic health check - could be expanded to check mongo/kafka/minio
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
+	})
+
+	mux.HandleFunc("/preview", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req PreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if req.Limit <= 0 {
+			req.Limit = 100
+		}
+
+		executor, ok := registry.Get(req.ReportKey, req.Version)
+		if !ok {
+			http.Error(w, "Executor not found", http.StatusNotFound)
+			return
+		}
+
+		reportReq := reports.Request{
+			ReportKey:  req.ReportKey,
+			Version:    req.Version,
+			Parameters: req.Parameters,
+			Limit:      req.Limit,
+		}
+
+		sink := &MemorySink{Rows: make([][]interface{}, 0)}
+		if err := executor.Run(r.Context(), reportReq, sink); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PreviewResponse{Rows: sink.Rows})
 	})
 
 	server := &http.Server{
@@ -87,9 +141,9 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Health check server starting on port %s", cfg.Port)
+		log.Printf("Server starting on port %s", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Health check server failed: %v", err)
+			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 

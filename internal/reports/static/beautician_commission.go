@@ -74,6 +74,10 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		}}},
 	}
 
+	if req.Limit > 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: req.Limit}})
+	}
+
 	cursor, err := e.db.Collection("orders").Aggregate(ctx, pipeline)
 	if err != nil {
 		return err

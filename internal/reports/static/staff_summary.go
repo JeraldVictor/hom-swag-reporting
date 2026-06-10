@@ -59,6 +59,10 @@ func (e *StaffSummaryExecutor) Run(ctx context.Context, req reports.Request, sin
 		}}},
 	}
 
+	if req.Limit > 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: req.Limit}})
+	}
+
 	cursor, err := e.db.Collection("staffs").Aggregate(ctx, pipeline)
 	if err != nil {
 		return err
