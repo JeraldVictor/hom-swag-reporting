@@ -1,0 +1,14 @@
+.git
+.github
+.kiro
+.gocache
+tmp
+docs
+.env
+.env.local
+.DS_Store
+*.log
+*.out
+*.test
+coverage.txt
+cover.out
