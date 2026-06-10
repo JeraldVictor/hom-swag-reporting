@@ -40,3 +40,5 @@ ehthumbs.db
 $RECYCLE.BIN/
 
 docs/*
+tmp/*
+

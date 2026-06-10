@@ -3,7 +3,6 @@ package reports
 import (
 	"context"
 	"fmt"
-	"io"
 )
 
 type Request struct {

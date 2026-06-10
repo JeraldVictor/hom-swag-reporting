@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"context"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"

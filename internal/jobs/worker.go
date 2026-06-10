@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,12 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/kafka"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/minio"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/mongo"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/render"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/reports"
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/kafka"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/minio"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/mongo"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/render"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -100,13 +98,20 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 
 	var sink reports.RowSink
 	var contentType string
+	var xlsxWriter *render.XLSXWriter
+
 	if req.Format == "CSV" {
 		csvWriter := render.NewCSVWriter(f)
 		defer csvWriter.Flush()
 		sink = csvWriter
 		contentType = "text/csv"
+	} else if req.Format == "XLSX" {
+		xlsxWriter = render.NewXLSXWriter()
+		defer xlsxWriter.Close()
+		sink = xlsxWriter
+		contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	} else {
-		w.handleError(ctx, req.JobID, "UNSUPPORTED_FORMAT", "Only CSV is currently supported", req.TraceID)
+		w.handleError(ctx, req.JobID, "UNSUPPORTED_FORMAT", "Only CSV and XLSX are currently supported", req.TraceID)
 		return
 	}
 
@@ -128,6 +133,11 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 		sink.(*render.CSVWriter).Flush()
 		if err := sink.(*render.CSVWriter).Error(); err != nil {
 			w.handleError(ctx, req.JobID, "CSV_FLUSH_ERROR", err.Error(), req.TraceID)
+			return
+		}
+	} else if req.Format == "XLSX" {
+		if err := xlsxWriter.WriteTo(f); err != nil {
+			w.handleError(ctx, req.JobID, "XLSX_WRITE_ERROR", err.Error(), req.TraceID)
 			return
 		}
 	}

@@ -9,13 +9,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jeraldvictor/hom-swag/reporting/internal/config"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/jobs"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/kafka"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/minio"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/mongo"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/reports"
-	"github.com/jeraldvictor/hom-swag/reporting/internal/reports/static"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/config"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/jobs"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/kafka"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/minio"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/mongo"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/reports/static"
 	"github.com/joho/godotenv"
 )
 
@@ -64,7 +64,11 @@ func main() {
 
 	// Initialize Registry
 	registry := reports.NewRegistry()
-	registry.Register(&static.RiderCommissionExecutor{})
+	registry.Register(static.NewRiderCommissionExecutor(mongoClient.Database))
+	registry.Register(static.NewBeauticianCommissionExecutor(mongoClient.Database))
+	registry.Register(static.NewPetrolWeeklyExecutor(mongoClient.Database))
+	registry.Register(static.NewDailySalesExecutor(mongoClient.Database))
+	registry.Register(static.NewStaffSummaryExecutor(mongoClient.Database))
 
 	// Initialize Worker
 	worker := jobs.NewWorker(mongoClient, minioClient, consumer, eventProducer, deadLetterProducer, registry)

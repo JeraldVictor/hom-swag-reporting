@@ -10,23 +10,23 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-type RiderCommissionExecutor struct {
+type BeauticianCommissionExecutor struct {
 	db *mongo.Database
 }
 
-func NewRiderCommissionExecutor(db *mongo.Database) *RiderCommissionExecutor {
-	return &RiderCommissionExecutor{db: db}
+func NewBeauticianCommissionExecutor(db *mongo.Database) *BeauticianCommissionExecutor {
+	return &BeauticianCommissionExecutor{db: db}
 }
 
-func (e *RiderCommissionExecutor) Key() string {
-	return "rider_commission"
+func (e *BeauticianCommissionExecutor) Key() string {
+	return "beautician_commission"
 }
 
-func (e *RiderCommissionExecutor) Version() int {
+func (e *BeauticianCommissionExecutor) Version() int {
 	return 1
 }
 
-func (e *RiderCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {
+func (e *BeauticianCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {
 	if _, ok := req.Parameters["start_date"]; !ok {
 		return fmt.Errorf("start_date is required")
 	}
@@ -36,7 +36,7 @@ func (e *RiderCommissionExecutor) Validate(ctx context.Context, req reports.Requ
 	return nil
 }
 
-func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, sink reports.RowSink) error {
+func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Request, sink reports.RowSink) error {
 	startDateStr := req.Parameters["start_date"].(string)
 	endDateStr := req.Parameters["end_date"].(string)
 
@@ -53,24 +53,21 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 			"status":     "completed",
 		}}},
 		{{Key: "$group", Value: bson.M{
-			"_id": "$rider_id",
-			"total_commission": bson.M{"$sum": "$rider_commission"},
+			"_id": "$beautician_id",
+			"total_commission": bson.M{"$sum": "$beautician_commission"},
 			"total_revenue":    bson.M{"$sum": "$revenue"},
 			"order_count":      bson.M{"$sum": 1},
 		}}},
-		{{Key: "$match", Value: bson.M{
-			"_id": bson.M{"$ne": nil},
-		}}},
 		{{Key: "$lookup", Value: bson.M{
-			"from":         "riders",
+			"from":         "beauticians",
 			"localField":   "_id",
 			"foreignField": "_id",
-			"as":           "rider",
+			"as":           "beautician",
 		}}},
-		{{Key: "$unwind", Value: "$rider"}},
+		{{Key: "$unwind", Value: "$beautician"}},
 		{{Key: "$project", Value: bson.M{
-			"name":             "$rider.name",
-			"emp_code":         "$rider.emp_code",
+			"name":             "$beautician.name",
+			"emp_code":         "$beautician.emp_code",
 			"total_commission": 1,
 			"total_revenue":    1,
 			"order_count":      1,
@@ -84,7 +81,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	defer cursor.Close(ctx)
 
 	// Header
-	sink.WriteRow([]interface{}{"Employee Code", "Rider Name", "Order Count", "Total Revenue", "Total Commission"})
+	sink.WriteRow([]interface{}{"Employee Code", "Beautician Name", "Order Count", "Total Revenue", "Total Commission"})
 
 	for cursor.Next(ctx) {
 		var result struct {
