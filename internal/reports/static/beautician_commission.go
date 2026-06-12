@@ -92,7 +92,8 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 					},
 				},
 			},
-			"order_count": bson.M{"$sum": 1},
+			"total_refund": bson.M{"$sum": paymentRefundExpr()},
+			"order_count":  bson.M{"$sum": 1},
 		}}},
 		{{Key: "$lookup", Value: bson.M{
 			"from":         "beauticians",
@@ -116,6 +117,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		"total_general_commission":       1,
 		"total_upgrade_addon_commission": 1,
 		"total_revenue":                  1,
+		"total_refund":                   1,
 		"order_count":                    1,
 	}}})
 
@@ -170,6 +172,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		"Special Commission",
 		"Payable General Commission",
 		"Upgrade/Add-on Commission",
+		"Refunded",
 		"Target 2 Bonus",
 		"Leaderboard Rank",
 		"Leaderboard Bonus",
@@ -208,6 +211,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			fmt.Sprintf("%.2f", result.TotalSpecialCommission),
 			fmt.Sprintf("%.2f", payableGeneralCommission),
 			fmt.Sprintf("%.2f", result.TotalUpgradeAddonCommission),
+			fmt.Sprintf("%.2f", result.TotalRefund),
 			fmt.Sprintf("%.2f", payableTarget2Bonus),
 			formatRank(leaderboard.Rank),
 			fmt.Sprintf("%.2f", leaderboard.Bonus),
@@ -228,6 +232,7 @@ type beauticianCommissionRow struct {
 	TotalGeneralCommission      float64            `bson:"total_general_commission"`
 	TotalUpgradeAddonCommission float64            `bson:"total_upgrade_addon_commission"`
 	TotalRevenue                float64            `bson:"total_revenue"`
+	TotalRefund                 float64            `bson:"total_refund"`
 	OrderCount                  int                `bson:"order_count"`
 }
 
