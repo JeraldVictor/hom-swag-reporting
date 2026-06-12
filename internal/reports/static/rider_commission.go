@@ -3,6 +3,7 @@ package static
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
@@ -51,6 +52,15 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
+
+	var officeID primitive.ObjectID
+	if officeIDStr, ok := req.Parameters["office_id"].(string); ok && officeIDStr != "" {
+		parsedOfficeID, err := primitive.ObjectIDFromHex(officeIDStr)
+		if err != nil {
+			return fmt.Errorf("invalid office_id: %w", err)
+		}
+		officeID = parsedOfficeID
+	}
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
@@ -117,10 +127,8 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		{{Key: "$unwind", Value: "$rider"}},
 	}
 
-	if officeIDStr, ok := req.Parameters["office_id"].(string); ok && officeIDStr != "" {
-		if officeID, err := primitive.ObjectIDFromHex(officeIDStr); err == nil {
-			pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{"rider.office_id": officeID}}})
-		}
+	if !officeID.IsZero() {
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{"rider.office_id": officeID}}})
 	}
 
 	pipeline = append(pipeline, bson.D{{Key: "$project", Value: bson.M{
@@ -142,21 +150,39 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 	defer cursor.Close(ctx)
 
-	// Header
-	sink.WriteRow([]interface{}{"Employee Code", "Rider Name", "Trip Count", "Total Distance KM", "Petrol Payable", "Commission Payable"})
-
+	var rows []riderCommissionRow
 	for cursor.Next(ctx) {
-		var result struct {
-			Name              string  `bson:"name"`
-			EmpCode           string  `bson:"emp_code"`
-			TripCount         int     `bson:"trip_count"`
-			TotalDistanceKM   float64 `bson:"total_distance_km"`
-			PetrolPayable     float64 `bson:"petrol_payable"`
-			CommissionPayable float64 `bson:"commission_payable"`
-		}
+		var result riderCommissionRow
 		if err := cursor.Decode(&result); err != nil {
 			return err
 		}
+		rows = append(rows, result)
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+
+	leaderboardByRider, err := e.getLeaderboardBonusByRider(ctx, officeID, rows)
+	if err != nil {
+		return err
+	}
+
+	// Header
+	sink.WriteRow([]interface{}{
+		"Employee Code",
+		"Rider Name",
+		"Trip Count",
+		"Total Distance KM",
+		"Petrol Payable",
+		"Trip Commission",
+		"Leaderboard Rank",
+		"Leaderboard Bonus",
+		"Total Commission",
+	})
+
+	for _, result := range rows {
+		leaderboard := leaderboardByRider[result.ID]
+		totalCommission := roundPayment(result.CommissionPayable + leaderboard.Bonus)
 		sink.WriteRow([]interface{}{
 			result.EmpCode,
 			result.Name,
@@ -164,10 +190,77 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 			fmt.Sprintf("%.2f", result.TotalDistanceKM),
 			fmt.Sprintf("%.2f", result.PetrolPayable),
 			fmt.Sprintf("%.2f", result.CommissionPayable),
+			formatRank(leaderboard.Rank),
+			fmt.Sprintf("%.2f", leaderboard.Bonus),
+			fmt.Sprintf("%.2f", totalCommission),
 		})
 	}
 
 	return nil
+}
+
+type riderCommissionRow struct {
+	ID                primitive.ObjectID `bson:"_id"`
+	Name              string             `bson:"name"`
+	EmpCode           string             `bson:"emp_code"`
+	TripCount         int                `bson:"trip_count"`
+	TotalDistanceKM   float64            `bson:"total_distance_km"`
+	PetrolPayable     float64            `bson:"petrol_payable"`
+	CommissionPayable float64            `bson:"commission_payable"`
+}
+
+func (e *RiderCommissionExecutor) getLeaderboardBonusByRider(
+	ctx context.Context,
+	officeID primitive.ObjectID,
+	rows []riderCommissionRow,
+) (map[primitive.ObjectID]riderLeaderboardBonus, error) {
+	bonusByRider := map[primitive.ObjectID]riderLeaderboardBonus{}
+	if officeID.IsZero() {
+		return bonusByRider, nil
+	}
+
+	rankedRows := append([]riderCommissionRow(nil), rows...)
+	sort.Slice(rankedRows, func(i, j int) bool {
+		if rankedRows[i].TripCount == rankedRows[j].TripCount {
+			return rankedRows[i].TotalDistanceKM > rankedRows[j].TotalDistanceKM
+		}
+		return rankedRows[i].TripCount > rankedRows[j].TripCount
+	})
+
+	prizes, err := e.getRiderLeaderboardPrizes(ctx, officeID)
+	if err != nil {
+		return nil, err
+	}
+
+	for index, row := range rankedRows {
+		bonus := 0.0
+		if index < len(prizes) {
+			bonus = prizes[index]
+		}
+		bonusByRider[row.ID] = riderLeaderboardBonus{
+			Rank:  index + 1,
+			Bonus: bonus,
+		}
+	}
+	return bonusByRider, nil
+}
+
+type riderLeaderboardBonus struct {
+	Rank  int
+	Bonus float64
+}
+
+func (e *RiderCommissionExecutor) getRiderLeaderboardPrizes(ctx context.Context, officeID primitive.ObjectID) ([]float64, error) {
+	var office struct {
+		LeaderboardPrizes struct {
+			Rider []float64 `bson:"rider"`
+		} `bson:"leaderboard_prizes"`
+	}
+	err := e.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}).Decode(&office)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return office.LeaderboardPrizes.Rider, err
 }
 
 func parseReportDate(value string, endOfDay bool) (time.Time, error) {
