@@ -68,32 +68,32 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 				"$lte": endDate,
 			},
 			"is_deleted": false,
-			"status":     "completed",
+			"status":     bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}},
 		}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
-			"total_special_commission": bson.M{"$sum": bson.M{"$ifNull": bson.A{
+			"total_special_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
 				"$commission_details.special_commission",
 				0,
-			}}},
-			"total_general_commission": bson.M{"$sum": bson.M{"$ifNull": bson.A{
+			}})},
+			"total_general_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
 				"$commission_details.general_commission",
 				0,
-			}}},
-			"total_upgrade_addon_commission": bson.M{"$sum": bson.M{"$ifNull": bson.A{
+			}})},
+			"total_upgrade_addon_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
 				"$commission_details.upgrade_addon_commission",
 				0,
-			}}},
+			}})},
 			"total_revenue": bson.M{
-				"$sum": bson.M{
+				"$sum": completedOnlyExpr(bson.M{
 					"$ifNull": bson.A{
 						"$order_cost",
 						"$revenue",
 					},
-				},
+				}),
 			},
 			"total_refund": bson.M{"$sum": paymentRefundExpr()},
-			"order_count":  bson.M{"$sum": 1},
+			"order_count":  bson.M{"$sum": completedOnlyExpr(1)},
 		}}},
 		{{Key: "$lookup", Value: bson.M{
 			"from":         "beauticians",
@@ -234,6 +234,10 @@ type beauticianCommissionRow struct {
 	TotalRevenue                float64            `bson:"total_revenue"`
 	TotalRefund                 float64            `bson:"total_refund"`
 	OrderCount                  int                `bson:"order_count"`
+}
+
+func completedOnlyExpr(value interface{}) bson.M {
+	return bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$status", "completed"}}, value, 0}}
 }
 
 type beauticianLeaderboardBonus struct {

@@ -91,6 +91,10 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 			"hygiene_fees":           bson.M{"$ifNull": bson.A{"$hygiene_fees", 0}},
 			"surge_charges":          bson.M{"$ifNull": bson.A{"$booking_info.surge_amount", 0}},
 			"membership_charges":     bson.M{"$ifNull": bson.A{"$membership_charge", 0}},
+			"cancellation_charge": bson.M{"$ifNull": bson.A{
+				"$cancellation_charge",
+				bson.M{"$ifNull": bson.A{"$payment.cancellation_charge", 0}},
+			}},
 			"total":                  bson.M{"$ifNull": bson.A{"$total", 0}},
 			"status":                 "$status",
 			"membership_discount":    bson.M{"$ifNull": bson.A{"$membership_discount_total", 0}},
@@ -202,6 +206,7 @@ type dailySalesRow struct {
 	HygieneFees          float64   `bson:"hygiene_fees"`
 	SurgeCharges         float64   `bson:"surge_charges"`
 	MembershipCharges    float64   `bson:"membership_charges"`
+	CancellationCharge   float64   `bson:"cancellation_charge"`
 	Total                float64   `bson:"total"`
 	Status               string    `bson:"status"`
 	MembershipDiscount   float64   `bson:"membership_discount"`
@@ -218,13 +223,16 @@ type dailySalesRow struct {
 
 func (r dailySalesRow) values() []interface{} {
 	cancellationCharges := 0.0
-	if r.Status != "completed" {
-		cancellationCharges = money2(r.Total)
+	if isCancelledDailySalesStatus(r.Status) {
+		cancellationCharges = money2(r.CancellationCharge)
 	}
 	totalValue := money2(r.TotalServicesCost + r.ConvenienceFees + r.HygieneFees + r.SurgeCharges + r.MembershipCharges + cancellationCharges)
 	couponDiscount := money2(math.Max(r.DiscountTotal-r.MembershipDiscount-r.SpecialDiscount, 0))
 	totalDiscount := money2(r.MembershipDiscount + r.SpecialDiscount + couponDiscount)
 	netReceivable := money2(math.Max(r.Total-r.Tips, 0))
+	if isCancelledDailySalesStatus(r.Status) {
+		netReceivable = cancellationCharges
+	}
 	totalReceivable := money2(netReceivable + r.Tips)
 	netReceivableBank := money2(r.Online + r.BankTransfer - r.PaymentGatewayOthers)
 	netTipsPayable := money2(r.Tips - r.PaymentGatewayTips)
@@ -298,6 +306,15 @@ func dailySalesStatuses(parameters map[string]interface{}) []interface{} {
 		return statuses
 	default:
 		return []interface{}{"completed"}
+	}
+}
+
+func isCancelledDailySalesStatus(status string) bool {
+	switch status {
+	case "cancelled", "cancelled_and_refunded", "arrived_and_cancelled":
+		return true
+	default:
+		return false
 	}
 }
 

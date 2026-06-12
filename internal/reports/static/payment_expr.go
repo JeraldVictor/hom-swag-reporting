@@ -30,6 +30,12 @@ func paymentHistoryPositiveTotalExpr() bson.M {
 						bson.M{"$toLower": bson.M{"$ifNull": bson.A{"$$this.label", ""}}},
 						"tip",
 					}},
+					bson.M{"$not": bson.A{
+						bson.M{"$regexMatch": bson.M{
+							"input": bson.M{"$toLower": bson.M{"$ifNull": bson.A{"$$this.label", ""}}},
+							"regex": "cancellation[ _](fee|charge)",
+						}},
+					}},
 				}},
 				"$$this.amount",
 				0,
@@ -66,6 +72,12 @@ func paymentHistoryMethodTotalExpr(methods bson.A) bson.M {
 						bson.M{"$toLower": bson.M{"$ifNull": bson.A{"$$this.label", ""}}},
 						"tip",
 					}},
+					bson.M{"$not": bson.A{
+						bson.M{"$regexMatch": bson.M{
+							"input": bson.M{"$toLower": bson.M{"$ifNull": bson.A{"$$this.label", ""}}},
+							"regex": "cancellation[ _](fee|charge)",
+						}},
+					}},
 					bson.M{"$in": bson.A{
 						bson.M{"$toLower": bson.M{"$ifNull": bson.A{"$$this.method", ""}}},
 						methods,
@@ -93,6 +105,10 @@ func paymentRefundExpr() bson.M {
 		bson.M{"$add": bson.A{
 			bson.M{"$ifNull": bson.A{"$payment.refund_amount", 0}},
 			bson.M{"$ifNull": bson.A{"$payment.partial_refund_amount", 0}},
+			bson.M{"$ifNull": bson.A{
+				"$payment.cancellation_refund_amount",
+				bson.M{"$ifNull": bson.A{"$cancellation_refund_amount", 0}},
+			}},
 		}},
 	}}
 }
