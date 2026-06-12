@@ -23,7 +23,7 @@ func (e *DailySalesExecutor) Key() string {
 }
 
 func (e *DailySalesExecutor) Version() int {
-	return 1
+	return 2
 }
 
 func (e *DailySalesExecutor) Validate(ctx context.Context, req reports.Request) error {
@@ -40,8 +40,14 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 	startDateStr := req.Parameters["start_date"].(string)
 	endDateStr := req.Parameters["end_date"].(string)
 
-	startDate, _ := time.Parse(time.RFC3339, startDateStr)
-	endDate, _ := time.Parse(time.RFC3339, endDateStr)
+	startDate, err := parseDailySalesDate(startDateStr, false)
+	if err != nil {
+		return fmt.Errorf("invalid start_date: %w", err)
+	}
+	endDate, err := parseDailySalesDate(endDateStr, true)
+	if err != nil {
+		return fmt.Errorf("invalid end_date: %w", err)
+	}
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
@@ -53,7 +59,7 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 			"status":     "completed",
 		}}},
 		{{Key: "$group", Value: bson.M{
-			"_id": "$booking_info.date",
+			"_id":         "$booking_info.date",
 			"total_sales": bson.M{"$sum": "$total"},
 			"order_count": bson.M{"$sum": 1},
 			"total_tax":   bson.M{"$sum": "$tax_total"},
@@ -75,6 +81,11 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 	// Header
 	sink.WriteRow([]interface{}{"Date", "Order Count", "Total Tax", "Total Tip", "Total Sales"})
 
+	var totalOrderCount int
+	var totalTax float64
+	var totalTip float64
+	var totalSales float64
+
 	for cursor.Next(ctx) {
 		var result struct {
 			Date       string  `bson:"_id"`
@@ -86,6 +97,10 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 		if err := cursor.Decode(&result); err != nil {
 			return err
 		}
+		totalOrderCount += result.OrderCount
+		totalTax += result.TotalTax
+		totalTip += result.TotalTip
+		totalSales += result.TotalSales
 		sink.WriteRow([]interface{}{
 			result.Date,
 			result.OrderCount,
@@ -95,5 +110,32 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 		})
 	}
 
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+
+	sink.WriteRow([]interface{}{
+		"Total",
+		totalOrderCount,
+		fmt.Sprintf("%.2f", totalTax),
+		fmt.Sprintf("%.2f", totalTip),
+		fmt.Sprintf("%.2f", totalSales),
+	})
+
 	return nil
+}
+
+func parseDailySalesDate(value string, endOfDay bool) (time.Time, error) {
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, nil
+	}
+
+	parsed, err := time.ParseInLocation("2006-01-02", value, time.FixedZone("IST", 5*60*60+30*60))
+	if err != nil {
+		return time.Time{}, err
+	}
+	if endOfDay {
+		return parsed.Add(24*time.Hour - time.Nanosecond), nil
+	}
+	return parsed, nil
 }
