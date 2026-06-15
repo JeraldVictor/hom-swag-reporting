@@ -3,27 +3,29 @@ package config
 import (
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
-	Port                   string
-	MongoDBURI             string
-	MongoDatabase          string
-	KafkaBrokers           string
-	RequestTopic           string
-	EventTopic             string
-	DeadLetterTopic        string
-	ConsumerGroup          string
-	MinIOEndpoint          string
-	MinIOAccessKey         string
-	MinIOSecretKey         string
-	MinIOUseSSL            bool
-	MinIOBucket            string
-	MaxRows                int
-	JobTTLDays             int
-	SignedURLTTL           int
+	Port            string
+	MongoDBURI      string
+	MongoDatabase   string
+	KafkaBrokers    string
+	RequestTopic    string
+	EventTopic      string
+	DeadLetterTopic string
+	ConsumerGroup   string
+	MinIOEndpoint   string
+	MinIOAccessKey  string
+	MinIOSecretKey  string
+	MinIOUseSSL     bool
+	MinIOBucket     string
+	MaxRows         int
+	JobTTLDays      int
+	SignedURLTTL    int
 }
 
 func Load() *Config {
@@ -49,6 +51,12 @@ func Load() *Config {
 
 func getMinIOEndpoint() string {
 	endpoint := getEnv("MINIO_ENDPOINT", "127.0.0.1:9000")
+	endpoint = strings.TrimSpace(endpoint)
+	if parsed, err := url.Parse(endpoint); err == nil && parsed.Host != "" {
+		endpoint = parsed.Host
+	}
+	endpoint = strings.TrimSuffix(endpoint, "/")
+
 	if _, _, err := net.SplitHostPort(endpoint); err == nil {
 		return endpoint
 	}
