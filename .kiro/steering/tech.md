@@ -55,7 +55,7 @@ air
 
 ## Container And Deployment
 
-- Container image name follows the workspace convention: `ghcr.io/<owner>/hom-swag-reporting:<tag>`.
+- Container image names follow the workspace convention: deploy pulls `docker.io/jeraldvictor/hom-swag-reporting:<tag>`, while release pushes may target `registry.digitalocean.com/homswag-repo/hom-swag-reporting:<tag>`.
 - `Containerfile` builds a static Linux binary with `golang:1.26.4-alpine` and runs it from Alpine on port `3003`.
 - `deploy/compose.yaml` runs this image as the `reporting` service with MongoDB, MinIO, and Kafka dependencies.
 
