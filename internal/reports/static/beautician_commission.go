@@ -63,9 +63,9 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
-			"service_date": bson.M{
-				"$gte": startDate,
-				"$lte": endDate,
+			"booking_info.date": bson.M{
+				"$gte": startDateKey,
+				"$lte": endDateKey,
 			},
 			"is_deleted": false,
 			"status":     bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}},
@@ -252,6 +252,8 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 	startDate time.Time,
 	endDate time.Time,
 ) (map[primitive.ObjectID]float64, error) {
+	startDateKey := startDate.Format("2006-01-02")
+	endDateKey := endDate.Format("2006-01-02")
 	revenueByBeautician := map[primitive.ObjectID]float64{}
 	if len(beauticianIDs) == 0 {
 		return revenueByBeautician, nil
@@ -259,7 +261,10 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 
 	match := bson.M{
 		"beautician_id": bson.M{"$in": beauticianIDs},
-		"service_date":  bson.M{"$gte": startDate, "$lte": endDate},
+		"booking_info.date": bson.M{
+			"$gte": startDateKey,
+			"$lte": endDateKey,
+		},
 		"is_deleted":    false,
 		"status":        "completed",
 	}

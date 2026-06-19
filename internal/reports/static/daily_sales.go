@@ -50,15 +50,13 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 	if err != nil {
 		return fmt.Errorf("invalid end_date: %w", err)
 	}
+	matchStart := startDate.Format("2006-01-02")
+	matchEnd := endDate.Format("2006-01-02")
 
 	match := bson.M{
 		"is_deleted": false,
 		"$or": bson.A{
-			bson.M{"service_date": bson.M{"$gte": startDate, "$lte": endDate}},
-			bson.M{
-				"service_date": bson.M{"$exists": false},
-				"created_at":   bson.M{"$gte": startDate, "$lte": endDate},
-			},
+			bson.M{"booking_info.date": bson.M{"$gte": matchStart, "$lte": matchEnd}},
 		},
 	}
 	if officeID, ok := dailySalesOfficeID(req.Parameters); ok {
@@ -82,7 +80,7 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 			"invoice_number":         "$invoice_number",
 			"invoice_date":           bson.M{"$ifNull": bson.A{"$status_updated_at", "$updated_at"}},
 			"order_number":           "$order_number",
-			"order_date":             bson.M{"$ifNull": bson.A{"$service_date", "$booking_info.date"}},
+			"order_date":             "$booking_info.date",
 			"beautician_unique_code": "$beautician.emp_code",
 			"beautician_pan":         "$beautician.pan_number",
 			"beautician_name":        "$beautician.name",

@@ -40,14 +40,22 @@ func (e *PetrolWeeklyExecutor) Run(ctx context.Context, req reports.Request, sin
 	startDateStr := req.Parameters["start_date"].(string)
 	endDateStr := req.Parameters["end_date"].(string)
 
-	startDate, _ := time.Parse(time.RFC3339, startDateStr)
-	endDate, _ := time.Parse(time.RFC3339, endDateStr)
+	startDate, err := parseReportDate(startDateStr, false)
+	if err != nil {
+		return fmt.Errorf("invalid start_date: %w", err)
+	}
+	endDate, err := parseReportDate(endDateStr, true)
+	if err != nil {
+		return fmt.Errorf("invalid end_date: %w", err)
+	}
+	matchStart := startDate.Format("2006-01-02")
+	matchEnd := endDate.Format("2006-01-02")
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
-			"created_at": bson.M{
-				"$gte": startDate,
-				"$lte": endDate,
+			"date": bson.M{
+				"$gte": matchStart,
+				"$lte": matchEnd,
 			},
 			"is_deleted": false,
 			"status":     "completed", // Assuming only completed trips count

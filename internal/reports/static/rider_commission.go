@@ -64,16 +64,9 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
-			"$or": bson.A{
-				bson.M{"date": bson.M{"$gte": startDateKey, "$lte": endDateKey}},
-				bson.M{"end_time": bson.M{"$gte": startDate, "$lte": endDate}},
-				bson.M{
-					"end_time": bson.M{"$exists": false},
-					"created_at": bson.M{
-						"$gte": startDate,
-						"$lte": endDate,
-					},
-				},
+			"date": bson.M{
+				"$gte": startDateKey,
+				"$lte": endDateKey,
 			},
 			"is_deleted":   false,
 			"kanban_state": "trip_completed",
