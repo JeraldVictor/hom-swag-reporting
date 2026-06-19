@@ -51,6 +51,8 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	if err != nil {
 		return fmt.Errorf("invalid end_date: %w", err)
 	}
+	startDateKey := startDate.Format("2006-01-02")
+	endDateKey := endDate.Format("2006-01-02")
 
 	var officeID primitive.ObjectID
 	if officeIDStr, ok := req.Parameters["office_id"].(string); ok && officeIDStr != "" {

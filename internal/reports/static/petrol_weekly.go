@@ -3,7 +3,6 @@ package static
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson"
