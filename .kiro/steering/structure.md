@@ -27,6 +27,7 @@ reporting/
 │       └── static/              # Static report executors
 │           ├── beautician_commission.go
 │           ├── daily_sales.go
+│           ├── payment_expr.go       # Shared MongoDB payment aggregation expressions
 │           ├── petrol_weekly.go
 │           ├── rider_commission.go
 │           └── staff_summary.go
@@ -42,6 +43,7 @@ reporting/
 - The service is intentionally small: `main.go` wires dependencies, registers executors, starts the HTTP server, and starts the Kafka worker.
 - Report executors implement `reports.Executor` with `Key()`, `Version()`, `Validate()`, and `Run()`.
 - Executors write rows to `reports.RowSink`; renderer selection stays in `jobs.Worker`.
+- Shared MongoDB aggregation expressions used by multiple reports live beside the static executors.
 - Job processing emits status events rather than mutating server state directly.
 - Temporary files are written under `/tmp/reports` and removed after upload.
 - The worker processes consumed jobs concurrently by starting a goroutine per valid request.

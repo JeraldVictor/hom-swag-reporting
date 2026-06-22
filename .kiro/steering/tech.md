@@ -10,7 +10,7 @@
 ## Core Dependencies
 
 - **Kafka**: `github.com/segmentio/kafka-go` for request consumption and status/dead-letter production.
-- **MongoDB**: `go.mongodb.org/mongo-driver` for source data aggregation.
+- **MongoDB**: `go.mongodb.org/mongo-driver` v1.17+ for source data aggregation.
 - **MinIO**: `github.com/minio/minio-go/v7` for artifact upload.
 - **XLSX**: `github.com/xuri/excelize/v2` for spreadsheet generation.
 - **UUID**: `github.com/google/uuid` for event IDs.
