@@ -15,6 +15,7 @@ import (
 	"github.com/JeraldVictor/hom-swag-reporting/internal/kafka"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/minio"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/mongo"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/observability"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports/static"
 	"github.com/joho/godotenv"
@@ -54,6 +55,20 @@ func main() {
 	// Create a context that is cancelled when we receive a termination signal
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTelemetry := observability.Init(ctx, observability.Config{
+		Enabled:     cfg.EnableOTEL,
+		TracesURL:   cfg.OTELTracesURL,
+		ServiceName: cfg.OTELServiceName,
+		Environment: os.Getenv("DEPLOYMENT_ENVIRONMENT"),
+	})
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			log.Printf("Failed to shutdown telemetry: %v", err)
+		}
+	}()
 
 	// Connect to MongoDB
 	mongoClient, err := mongo.Connect(ctx, cfg.MongoDBURI, cfg.MongoDatabase)

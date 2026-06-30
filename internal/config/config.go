@@ -26,6 +26,9 @@ type Config struct {
 	MaxRows         int
 	JobTTLDays      int
 	SignedURLTTL    int
+	EnableOTEL      bool
+	OTELTracesURL   string
+	OTELServiceName string
 }
 
 func Load() *Config {
@@ -46,6 +49,9 @@ func Load() *Config {
 		MaxRows:         getEnvInt("REPORTING_MAX_ROWS", 200000),
 		JobTTLDays:      getEnvInt("REPORTING_JOB_TTL_DAYS", 30),
 		SignedURLTTL:    getEnvInt("REPORTING_SIGNED_URL_TTL_SECONDS", 900),
+		EnableOTEL:      getEnvBool("ENABLE_OTEL", false),
+		OTELTracesURL:   getEnv("OTEL_TRACES_ENDPOINT", "http://127.0.0.1:4318/v1/traces"),
+		OTELServiceName: getEnv("OTEL_REPORTING_SERVICE_NAME", "reporting-service"),
 	}
 }
 

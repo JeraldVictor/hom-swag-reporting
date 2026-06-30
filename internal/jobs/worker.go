@@ -55,15 +55,21 @@ func (w *Worker) Start(ctx context.Context) {
 				continue
 			}
 
+			messageCtx, messageSpan := w.Consumer.StartMessageSpan(ctx, msg)
 			var req kafka.ReportRequest
 			if err := json.Unmarshal(msg.Value, &req); err != nil {
 				log.Printf("Error unmarshaling request: %v", err)
+				messageSpan.RecordError(err)
 				// Send to dead letter
-				w.DeadLetterProducer.SendMessage(ctx, string(msg.Key), msg.Value)
+				w.DeadLetterProducer.SendMessage(messageCtx, string(msg.Key), msg.Value)
+				messageSpan.End()
 				continue
 			}
 
-			go w.ProcessJob(context.Background(), req)
+			go func() {
+				defer messageSpan.End()
+				w.ProcessJob(messageCtx, req)
+			}()
 		}
 	}
 }
