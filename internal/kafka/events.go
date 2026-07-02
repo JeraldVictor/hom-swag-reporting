@@ -18,6 +18,7 @@ type ReportRequest struct {
 	RequestedBy        primitive.ObjectID     `json:"requested_by"`
 	OfficeID           *primitive.ObjectID    `json:"office_id,omitempty"`
 	Parameters         map[string]interface{} `json:"parameters"`
+	SelectedColumns    []string               `json:"selected_columns,omitempty"`
 	DefinitionSnapshot map[string]interface{} `json:"definition_snapshot"`
 	TraceID            string                 `json:"trace_id"`
 	CreatedAt          time.Time              `json:"created_at"`

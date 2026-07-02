@@ -6,15 +6,30 @@ import (
 )
 
 type Request struct {
-	ReportKey  string
-	Version    int
-	Format     string
-	Parameters map[string]interface{}
-	Limit      int
+	ReportKey       string
+	Version         int
+	Format          string
+	Parameters      map[string]interface{}
+	Limit           int
+	SelectedColumns []string
 }
 
 type RowSink interface {
 	WriteRow(row []interface{}) error
+}
+
+type Column struct {
+	Key                string
+	Label              string
+	Type               string
+	Group              string
+	SourcePath         string
+	FormulaID          string
+	ContributesToTotal bool
+	Sensitive          bool
+	Sortable           bool
+	Filterable         bool
+	DefaultVisible     bool
 }
 
 type Executor interface {
@@ -22,6 +37,10 @@ type Executor interface {
 	Version() int
 	Validate(ctx context.Context, req Request) error
 	Run(ctx context.Context, req Request, sink RowSink) error
+}
+
+type ColumnProvider interface {
+	Columns() []Column
 }
 
 type Registry struct {
@@ -43,4 +62,12 @@ func (r *Registry) Get(key string, version int) (Executor, bool) {
 	k := fmt.Sprintf("%s_v%d", key, version)
 	e, ok := r.executors[k]
 	return e, ok
+}
+
+func (r *Registry) List() []Executor {
+	executors := make([]Executor, 0, len(r.executors))
+	for _, executor := range r.executors {
+		executors = append(executors, executor)
+	}
+	return executors
 }

@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,21 +20,37 @@ import (
 	"github.com/JeraldVictor/hom-swag-reporting/internal/minio"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/mongo"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/observability"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/render"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports/static"
 	"github.com/joho/godotenv"
 )
 
 type PreviewRequest struct {
-	ReportKey  string                 `json:"report_key"`
-	Version    int                    `json:"version"`
-	OfficeID   string                 `json:"office_id,omitempty"`
-	Parameters map[string]interface{} `json:"parameters"`
-	Limit      int                    `json:"limit"`
+	ReportKey       string                 `json:"report_key"`
+	Version         int                    `json:"version"`
+	Format          string                 `json:"format,omitempty"`
+	OfficeID        string                 `json:"office_id,omitempty"`
+	Parameters      map[string]interface{} `json:"parameters"`
+	Limit           int                    `json:"limit"`
+	SelectedColumns []string               `json:"selected_columns,omitempty"`
 }
 
 type PreviewResponse struct {
 	Rows [][]interface{} `json:"rows"`
+}
+
+type DefinitionResponse struct {
+	ReportKey string           `json:"report_key"`
+	Version   int              `json:"version"`
+	Columns   []reports.Column `json:"columns"`
+}
+
+type SummaryResponse struct {
+	ReportKey string             `json:"report_key"`
+	Version   int                `json:"version"`
+	RowCount  int                `json:"row_count"`
+	Totals    map[string]float64 `json:"totals"`
 }
 
 type MemorySink struct {
@@ -40,6 +60,226 @@ type MemorySink struct {
 func (s *MemorySink) WriteRow(row []interface{}) error {
 	s.Rows = append(s.Rows, row)
 	return nil
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+			w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func withOptionalBearerAuth(next http.Handler) http.Handler {
+	token := strings.TrimSpace(os.Getenv("REPORTING_API_TOKEN"))
+	if token == "" {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		expected := "Bearer " + token
+		if r.Header.Get("Authorization") != expected {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func buildReportRequest(req PreviewRequest) reports.Request {
+	parameters := make(map[string]interface{}, len(req.Parameters)+1)
+	for key, value := range req.Parameters {
+		parameters[key] = value
+	}
+	if req.OfficeID != "" {
+		parameters["office_id"] = req.OfficeID
+	}
+
+	return reports.Request{
+		ReportKey:       req.ReportKey,
+		Version:         req.Version,
+		Parameters:      parameters,
+		Limit:           req.Limit,
+		SelectedColumns: req.SelectedColumns,
+	}
+}
+
+func runInMemoryReport(ctx context.Context, executor reports.Executor, req reports.Request) (*MemorySink, error) {
+	sink := &MemorySink{Rows: make([][]interface{}, 0)}
+	if err := executor.Validate(ctx, req); err != nil {
+		return nil, err
+	}
+
+	projectedSink, err := reports.NewProjectionSink(executor, req.SelectedColumns, sink)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := executor.Run(ctx, req, projectedSink); err != nil {
+		return nil, err
+	}
+	return sink, nil
+}
+
+func runRawInMemoryReport(ctx context.Context, executor reports.Executor, req reports.Request) (*MemorySink, error) {
+	sink := &MemorySink{Rows: make([][]interface{}, 0)}
+	if err := executor.Validate(ctx, req); err != nil {
+		return nil, err
+	}
+
+	if _, err := reports.NewProjectionSink(executor, req.SelectedColumns, &MemorySink{}); err != nil {
+		return nil, err
+	}
+
+	rawReq := req
+	rawReq.SelectedColumns = nil
+	if err := executor.Run(ctx, rawReq, sink); err != nil {
+		return nil, err
+	}
+	return sink, nil
+}
+
+func summarizeRows(executor reports.Executor, selectedColumns []string, rows [][]interface{}) SummaryResponse {
+	response := SummaryResponse{
+		ReportKey: executor.Key(),
+		Version:   executor.Version(),
+		Totals:    map[string]float64{},
+	}
+	if len(rows) <= 1 {
+		return response
+	}
+
+	columns := []reports.Column{}
+	if provider, ok := executor.(reports.ColumnProvider); ok {
+		columns = provider.Columns()
+	}
+	indexes := make([]int, 0, len(columns))
+	if len(selectedColumns) > 0 {
+		indexByKey := map[string]int{}
+		for index, column := range columns {
+			indexByKey[column.Key] = index
+		}
+		for _, key := range selectedColumns {
+			if index, ok := indexByKey[key]; ok {
+				indexes = append(indexes, index)
+			}
+		}
+	} else {
+		for index := range columns {
+			indexes = append(indexes, index)
+		}
+	}
+
+	dataRows := rows[1:]
+	if len(dataRows) > 0 && len(dataRows[len(dataRows)-1]) > 0 && dataRows[len(dataRows)-1][0] == "Total" {
+		dataRows = dataRows[:len(dataRows)-1]
+	}
+	response.RowCount = len(dataRows)
+
+	for _, row := range dataRows {
+		for _, index := range indexes {
+			if index >= len(columns) || !columns[index].ContributesToTotal {
+				continue
+			}
+			if index >= len(row) {
+				continue
+			}
+			cell := row[index]
+			switch value := cell.(type) {
+			case int:
+				response.Totals[columns[index].Key] += float64(value)
+			case int64:
+				response.Totals[columns[index].Key] += float64(value)
+			case float64:
+				response.Totals[columns[index].Key] += value
+			case string:
+				if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+					response.Totals[columns[index].Key] += parsed
+				}
+			}
+		}
+	}
+	return response
+}
+
+func exportReport(ctx context.Context, executor reports.Executor, req reports.Request, title string) ([]byte, string, string, error) {
+	format := strings.ToUpper(req.Format)
+	if format == "" {
+		format = "CSV"
+	}
+
+	var out bytes.Buffer
+	var sink reports.RowSink
+	var contentType string
+	var extension string
+	var xlsxWriter *render.XLSXWriter
+	var pdfWriter *render.PDFWriter
+
+	switch format {
+	case "CSV":
+		csvWriter := render.NewCSVWriter(&out)
+		sink = csvWriter
+		contentType = "text/csv"
+		extension = "csv"
+	case "XLSX":
+		xlsxWriter = render.NewXLSXWriter()
+		defer xlsxWriter.Close()
+		sink = xlsxWriter
+		contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+		extension = "xlsx"
+	case "PDF":
+		pdfWriter = render.NewPDFWriter()
+		sink = pdfWriter
+		contentType = "application/pdf"
+		extension = "pdf"
+	default:
+		return nil, "", "", strconv.ErrSyntax
+	}
+
+	if err := executor.Validate(ctx, req); err != nil {
+		return nil, "", "", err
+	}
+	projectedSink, err := reports.NewProjectionSink(executor, req.SelectedColumns, sink)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if err := executor.Run(ctx, req, projectedSink); err != nil {
+		return nil, "", "", err
+	}
+
+	switch format {
+	case "CSV":
+		csvWriter := sink.(*render.CSVWriter)
+		csvWriter.Flush()
+		if err := csvWriter.Error(); err != nil {
+			return nil, "", "", err
+		}
+	case "XLSX":
+		if err := xlsxWriter.WriteTo(&out); err != nil {
+			return nil, "", "", err
+		}
+	case "PDF":
+		if err := pdfWriter.WriteTo(&out, title); err != nil {
+			return nil, "", "", err
+		}
+	}
+
+	return out.Bytes(), contentType, extension, nil
 }
 
 func main() {
@@ -101,6 +341,7 @@ func main() {
 	registry.Register(static.NewPetrolWeeklyExecutor(mongoClient.Database))
 	registry.Register(static.NewDailySalesExecutor(mongoClient.Database))
 	registry.Register(static.NewStaffSummaryExecutor(mongoClient.Database))
+	registry.Register(static.NewCODPendingExecutor(mongoClient.Database))
 
 	// Initialize Worker
 	worker := jobs.NewWorker(mongoClient, minioClient, consumer, eventProducer, deadLetterProducer, registry)
@@ -110,6 +351,34 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
+	})
+
+	mux.HandleFunc("/definitions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		definitions := make([]DefinitionResponse, 0)
+		for _, executor := range registry.List() {
+			definition := DefinitionResponse{
+				ReportKey: executor.Key(),
+				Version:   executor.Version(),
+			}
+			if provider, ok := executor.(reports.ColumnProvider); ok {
+				definition.Columns = provider.Columns()
+			}
+			definitions = append(definitions, definition)
+		}
+		sort.Slice(definitions, func(i, j int) bool {
+			if definitions[i].ReportKey == definitions[j].ReportKey {
+				return definitions[i].Version < definitions[j].Version
+			}
+			return definitions[i].ReportKey < definitions[j].ReportKey
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(definitions)
 	})
 
 	mux.HandleFunc("/preview", func(w http.ResponseWriter, r *http.Request) {
@@ -134,23 +403,8 @@ func main() {
 			return
 		}
 
-		parameters := make(map[string]interface{}, len(req.Parameters)+1)
-		for key, value := range req.Parameters {
-			parameters[key] = value
-		}
-		if req.OfficeID != "" {
-			parameters["office_id"] = req.OfficeID
-		}
-
-		reportReq := reports.Request{
-			ReportKey:  req.ReportKey,
-			Version:    req.Version,
-			Parameters: parameters,
-			Limit:      req.Limit,
-		}
-
-		sink := &MemorySink{Rows: make([][]interface{}, 0)}
-		if err := executor.Run(r.Context(), reportReq, sink); err != nil {
+		sink, err := runInMemoryReport(r.Context(), executor, buildReportRequest(req))
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -159,9 +413,70 @@ func main() {
 		json.NewEncoder(w).Encode(PreviewResponse{Rows: sink.Rows})
 	})
 
+	mux.HandleFunc("/summary", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req PreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		executor, ok := registry.Get(req.ReportKey, req.Version)
+		if !ok {
+			http.Error(w, "Executor not found", http.StatusNotFound)
+			return
+		}
+
+		sink, err := runRawInMemoryReport(r.Context(), executor, buildReportRequest(req))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(summarizeRows(executor, req.SelectedColumns, sink.Rows))
+	})
+
+	mux.HandleFunc("/export", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req PreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		executor, ok := registry.Get(req.ReportKey, req.Version)
+		if !ok {
+			http.Error(w, "Executor not found", http.StatusNotFound)
+			return
+		}
+
+		reportReq := buildReportRequest(req)
+		reportReq.Format = req.Format
+		body, contentType, extension, err := exportReport(r.Context(), executor, reportReq, executor.Key())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		filename := executor.Key() + "_v" + strconv.Itoa(executor.Version()) + "." + extension
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	})
+
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: mux,
+		Handler: withCORS(withOptionalBearerAuth(mux)),
 	}
 
 	go func() {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -23,6 +24,10 @@ func (e *PetrolWeeklyExecutor) Key() string {
 
 func (e *PetrolWeeklyExecutor) Version() int {
 	return 1
+}
+
+func (e *PetrolWeeklyExecutor) Columns() []reports.Column {
+	return petrolWeeklyColumns
 }
 
 func (e *PetrolWeeklyExecutor) Validate(ctx context.Context, req reports.Request) error {
@@ -60,7 +65,7 @@ func (e *PetrolWeeklyExecutor) Run(ctx context.Context, req reports.Request, sin
 			"status":     "completed", // Assuming only completed trips count
 		}}},
 		{{Key: "$group", Value: bson.M{
-			"_id": "$rider_id",
+			"_id":            "$rider_id",
 			"total_distance": bson.M{"$sum": "$fare_calculation.trip_distance_km"},
 			"total_amount":   bson.M{"$sum": "$fare_calculation.calculated_fare"},
 		}}},
@@ -90,19 +95,21 @@ func (e *PetrolWeeklyExecutor) Run(ctx context.Context, req reports.Request, sin
 	defer cursor.Close(ctx)
 
 	// Header
-	sink.WriteRow([]interface{}{"Employee Code", "Rider Name", "Total Distance (KM)", "Payable Amount"})
+	sink.WriteRow([]interface{}{"Staff ID", "Employee Code", "Rider Name", "Total Distance (KM)", "Payable Amount"})
 
 	for cursor.Next(ctx) {
 		var result struct {
-			RiderName     string  `bson:"rider_name"`
-			EmpCode       string  `bson:"emp_code"`
-			TotalDistance float64 `bson:"total_distance"`
-			TotalAmount   float64 `bson:"total_amount"`
+			ID            primitive.ObjectID `bson:"_id"`
+			RiderName     string             `bson:"rider_name"`
+			EmpCode       string             `bson:"emp_code"`
+			TotalDistance float64            `bson:"total_distance"`
+			TotalAmount   float64            `bson:"total_amount"`
 		}
 		if err := cursor.Decode(&result); err != nil {
 			return err
 		}
 		sink.WriteRow([]interface{}{
+			result.ID.Hex(),
 			result.EmpCode,
 			result.RiderName,
 			fmt.Sprintf("%.2f", result.TotalDistance),

@@ -26,6 +26,10 @@ func (e *StaffSummaryExecutor) Version() int {
 	return 1
 }
 
+func (e *StaffSummaryExecutor) Columns() []reports.Column {
+	return staffSummaryColumns
+}
+
 func (e *StaffSummaryExecutor) Validate(ctx context.Context, req reports.Request) error {
 	if _, ok := req.Parameters["start_date"]; !ok {
 		return fmt.Errorf("start_date is required")
@@ -53,8 +57,8 @@ func (e *StaffSummaryExecutor) Run(ctx context.Context, req reports.Request, sin
 		}}},
 		{{Key: "$unwind", Value: bson.M{"path": "$role", "preserveNullAndEmptyArrays": true}}},
 		{{Key: "$project", Value: bson.M{
-			"name":     1,
-			"emp_code": 1,
+			"name":      1,
+			"emp_code":  1,
 			"role_name": "$role.name",
 		}}},
 	}

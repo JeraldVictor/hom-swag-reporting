@@ -29,6 +29,10 @@ func (e *BeauticianCommissionExecutor) Version() int {
 	return 1
 }
 
+func (e *BeauticianCommissionExecutor) Columns() []reports.Column {
+	return beauticianCommissionColumns
+}
+
 func (e *BeauticianCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {
 	if _, ok := req.Parameters["start_date"]; !ok {
 		return fmt.Errorf("start_date is required")
@@ -53,6 +57,17 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	}
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
+	match := bson.M{
+		"booking_info.date": bson.M{
+			"$gte": startDateKey,
+			"$lte": endDateKey,
+		},
+		"is_deleted": false,
+		"status":     bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}},
+	}
+	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
+		match["beautician_id"] = staffID
+	}
 
 	var officeID primitive.ObjectID
 	if officeIDStr, ok := req.Parameters["office_id"].(string); ok && officeIDStr != "" {
@@ -64,14 +79,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	}
 
 	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{
-			"booking_info.date": bson.M{
-				"$gte": startDateKey,
-				"$lte": endDateKey,
-			},
-			"is_deleted": false,
-			"status":     bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}},
-		}}},
+		{{Key: "$match", Value: match}},
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
 			"total_special_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
@@ -163,6 +171,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 
 	// Header
 	sink.WriteRow([]interface{}{
+		"Staff ID",
 		"Employee Code",
 		"Beautician Name",
 		"Order Count",
@@ -202,6 +211,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 				leaderboard.Bonus,
 		)
 		sink.WriteRow([]interface{}{
+			result.ID.Hex(),
 			result.EmpCode,
 			result.Name,
 			result.OrderCount,
@@ -267,8 +277,8 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 			"$gte": startDateKey,
 			"$lte": endDateKey,
 		},
-		"is_deleted":    false,
-		"status":        "completed",
+		"is_deleted": false,
+		"status":     "completed",
 	}
 	if !officeID.IsZero() {
 		match["office_id"] = officeID

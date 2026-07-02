@@ -89,8 +89,12 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 	}
 
 	// 3. Run report and stream to temp file
-	tempDir := "/tmp/reports"
-	os.MkdirAll(tempDir, 0755)
+	tempDir, err := os.MkdirTemp("", "homswag-report-*")
+	if err != nil {
+		w.handleError(ctx, req.JobID, "TEMP_DIR_ERROR", err.Error(), req.TraceID)
+		return
+	}
+	defer os.RemoveAll(tempDir)
 	filename := fmt.Sprintf("%s_%s.%s", req.ReportKey, req.JobID.Hex(), strings.ToLower(req.Format))
 	tempFilePath := filepath.Join(tempDir, filename)
 
@@ -137,13 +141,25 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 	}
 
 	reportReq := reports.Request{
-		ReportKey:  req.ReportKey,
-		Version:    req.ReportVersion,
-		Format:     req.Format,
-		Parameters: parameters,
+		ReportKey:       req.ReportKey,
+		Version:         req.ReportVersion,
+		Format:          req.Format,
+		Parameters:      parameters,
+		SelectedColumns: req.SelectedColumns,
 	}
 
-	if err := executor.Run(ctx, reportReq, sink); err != nil {
+	if err := executor.Validate(ctx, reportReq); err != nil {
+		w.handleError(ctx, req.JobID, "REPORT_VALIDATION_ERROR", err.Error(), req.TraceID)
+		return
+	}
+
+	projectedSink, err := reports.NewProjectionSink(executor, req.SelectedColumns, sink)
+	if err != nil {
+		w.handleError(ctx, req.JobID, "REPORT_COLUMN_ERROR", err.Error(), req.TraceID)
+		return
+	}
+
+	if err := executor.Run(ctx, reportReq, projectedSink); err != nil {
 		w.handleError(ctx, req.JobID, "REPORT_RUN_ERROR", err.Error(), req.TraceID)
 		return
 	}

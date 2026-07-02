@@ -28,6 +28,10 @@ func (e *DailySalesExecutor) Version() int {
 	return 2
 }
 
+func (e *DailySalesExecutor) Columns() []reports.Column {
+	return dailySalesColumns
+}
+
 func (e *DailySalesExecutor) Validate(ctx context.Context, req reports.Request) error {
 	if _, ok := req.Parameters["start_date"]; !ok {
 		return fmt.Errorf("start_date is required")

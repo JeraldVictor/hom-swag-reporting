@@ -28,6 +28,10 @@ func (e *RiderCommissionExecutor) Version() int {
 	return 1
 }
 
+func (e *RiderCommissionExecutor) Columns() []reports.Column {
+	return riderCommissionColumns
+}
+
 func (e *RiderCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {
 	if _, ok := req.Parameters["start_date"]; !ok {
 		return fmt.Errorf("start_date is required")
@@ -52,6 +56,20 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
+	match := bson.M{
+		"date": bson.M{
+			"$gte": startDateKey,
+			"$lte": endDateKey,
+		},
+		"is_deleted":   false,
+		"kanban_state": "trip_completed",
+	}
+	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
+		match["$or"] = bson.A{
+			bson.M{"rider_id": staffID},
+			bson.M{"beautician_id": staffID, "is_self_drive": true},
+		}
+	}
 
 	var officeID primitive.ObjectID
 	if officeIDStr, ok := req.Parameters["office_id"].(string); ok && officeIDStr != "" {
@@ -63,14 +81,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 
 	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{
-			"date": bson.M{
-				"$gte": startDateKey,
-				"$lte": endDateKey,
-			},
-			"is_deleted":   false,
-			"kanban_state": "trip_completed",
-		}}},
+		{{Key: "$match", Value: match}},
 		{{Key: "$addFields", Value: bson.M{
 			"payable_distance_km": bson.M{
 				"$cond": bson.A{
@@ -162,6 +173,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 
 	// Header
 	sink.WriteRow([]interface{}{
+		"Staff ID",
 		"Employee Code",
 		"Rider Name",
 		"Trip Count",
@@ -177,6 +189,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		leaderboard := leaderboardByRider[result.ID]
 		totalCommission := roundPayment(result.CommissionPayable + leaderboard.Bonus)
 		sink.WriteRow([]interface{}{
+			result.ID.Hex(),
 			result.EmpCode,
 			result.Name,
 			result.TripCount,
