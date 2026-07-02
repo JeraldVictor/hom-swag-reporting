@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	Port            string
+	TempDir         string
 	MongoDBURI      string
 	MongoDatabase   string
 	KafkaBrokers    string
@@ -34,6 +35,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Port:            getEnv("PORT", "3003"),
+		TempDir:         getEnv("REPORTING_TEMP_DIR", "/tmp/reports"),
 		MongoDBURI:      getEnv("MONGODB_URI", "mongodb://admin:password@127.0.0.1:27017/homswag?authSource=admin"),
 		MongoDatabase:   getEnv("MONGO_DATABASE", "homswag"),
 		KafkaBrokers:    getEnv("KAFKA_BROKERS", "127.0.0.1:9094"),

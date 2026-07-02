@@ -344,7 +344,7 @@ func main() {
 	registry.Register(static.NewCODPendingExecutor(mongoClient.Database))
 
 	// Initialize Worker
-	worker := jobs.NewWorker(mongoClient, minioClient, consumer, eventProducer, deadLetterProducer, registry)
+	worker := jobs.NewWorker(mongoClient, minioClient, cfg.TempDir, consumer, eventProducer, deadLetterProducer, registry)
 
 	// Start health check and preview server
 	mux := http.NewServeMux()

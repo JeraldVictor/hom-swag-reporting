@@ -19,19 +19,39 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+func resolveTempDir(base string) (string, error) {
+	cleanBase := strings.TrimSpace(base)
+	if cleanBase == "" {
+		return os.MkdirTemp("", "homswag-report-*")
+	}
+
+	if err := os.MkdirAll(cleanBase, 0o700); err != nil {
+		return "", err
+	}
+
+	if dir, err := os.MkdirTemp(cleanBase, "homswag-report-*"); err == nil {
+		return dir, nil
+	} else {
+		log.Printf("Failed to create job temp directory in %s: %v", cleanBase, err)
+		return os.MkdirTemp("", "homswag-report-*")
+	}
+}
+
 type Worker struct {
 	MongoClient        *mongo.Client
 	MinioClient        *minio.Client
+	TempDir            string
 	Consumer           *kafka.Consumer
 	EventProducer      *kafka.Producer
 	DeadLetterProducer *kafka.Producer
 	Registry           *reports.Registry
 }
 
-func NewWorker(mc *mongo.Client, minioC *minio.Client, consumer *kafka.Consumer, ep *kafka.Producer, dlp *kafka.Producer, reg *reports.Registry) *Worker {
+func NewWorker(mc *mongo.Client, minioC *minio.Client, tempDir string, consumer *kafka.Consumer, ep *kafka.Producer, dlp *kafka.Producer, reg *reports.Registry) *Worker {
 	return &Worker{
 		MongoClient:        mc,
 		MinioClient:        minioC,
+		TempDir:            tempDir,
 		Consumer:           consumer,
 		EventProducer:      ep,
 		DeadLetterProducer: dlp,
@@ -89,7 +109,7 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 	}
 
 	// 3. Run report and stream to temp file
-	tempDir, err := os.MkdirTemp("", "homswag-report-*")
+	tempDir, err := resolveTempDir(w.TempDir)
 	if err != nil {
 		w.handleError(ctx, req.JobID, "TEMP_DIR_ERROR", err.Error(), req.TraceID)
 		return
