@@ -16,6 +16,7 @@ func (testExecutor) Columns() []Column {
 		{Key: "customer_name", Label: "Customer Name"},
 		{Key: "cash", Label: "Cash"},
 		{Key: "online", Label: "Online"},
+		{Key: "pan", Label: "PAN", Sensitive: true},
 	}
 }
 
@@ -61,5 +62,38 @@ func TestProjectionSinkRejectsDuplicateColumns(t *testing.T) {
 	_, err := NewProjectionSink(testExecutor{}, []string{"cash", "cash"}, &memorySink{})
 	if err == nil {
 		t.Fatal("expected duplicate column error")
+	}
+}
+
+func TestProjectionSinkRejectsSensitiveColumnsWithoutPermission(t *testing.T) {
+	_, err := NewProjectionSinkWithOptions(
+		testExecutor{},
+		[]string{"pan"},
+		&memorySink{},
+		ProjectionOptions{AllowSensitive: false},
+	)
+	if err == nil {
+		t.Fatal("expected sensitive column permission error")
+	}
+}
+
+func TestProjectionSinkOmitsSensitiveColumnsByDefaultWithoutPermission(t *testing.T) {
+	inner := &memorySink{}
+	sink, err := NewProjectionSinkWithOptions(
+		testExecutor{},
+		nil,
+		inner,
+		ProjectionOptions{AllowSensitive: false},
+	)
+	if err != nil {
+		t.Fatalf("NewProjectionSinkWithOptions returned error: %v", err)
+	}
+
+	if err := sink.WriteRow([]interface{}{"Customer Name", "Cash", "Online", "PAN"}); err != nil {
+		t.Fatalf("WriteRow header returned error: %v", err)
+	}
+
+	if got := inner.rows[0]; len(got) != 3 {
+		t.Fatalf("projected row should omit sensitive column: %#v", got)
 	}
 }

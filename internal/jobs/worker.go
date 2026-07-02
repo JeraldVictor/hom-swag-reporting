@@ -166,6 +166,7 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 		Format:          req.Format,
 		Parameters:      parameters,
 		SelectedColumns: req.SelectedColumns,
+		AllowSensitive:  req.AllowSensitive,
 	}
 
 	if err := executor.Validate(ctx, reportReq); err != nil {
@@ -173,7 +174,9 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 		return
 	}
 
-	projectedSink, err := reports.NewProjectionSink(executor, req.SelectedColumns, sink)
+	projectedSink, err := reports.NewProjectionSinkWithOptions(executor, req.SelectedColumns, sink, reports.ProjectionOptions{
+		AllowSensitive: req.AllowSensitive,
+	})
 	if err != nil {
 		w.handleError(ctx, req.JobID, "REPORT_COLUMN_ERROR", err.Error(), req.TraceID)
 		return

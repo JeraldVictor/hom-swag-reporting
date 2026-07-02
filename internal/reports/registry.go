@@ -12,6 +12,7 @@ type Request struct {
 	Parameters      map[string]interface{}
 	Limit           int
 	SelectedColumns []string
+	AllowSensitive  bool
 }
 
 type RowSink interface {

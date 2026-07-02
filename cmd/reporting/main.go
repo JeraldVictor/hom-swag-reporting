@@ -34,6 +34,7 @@ type PreviewRequest struct {
 	Parameters      map[string]interface{} `json:"parameters"`
 	Limit           int                    `json:"limit"`
 	SelectedColumns []string               `json:"selected_columns,omitempty"`
+	AllowSensitive  bool                   `json:"allow_sensitive_columns,omitempty"`
 }
 
 type PreviewResponse struct {
@@ -116,6 +117,7 @@ func buildReportRequest(req PreviewRequest) reports.Request {
 		Parameters:      parameters,
 		Limit:           req.Limit,
 		SelectedColumns: req.SelectedColumns,
+		AllowSensitive:  req.AllowSensitive,
 	}
 }
 
@@ -125,7 +127,9 @@ func runInMemoryReport(ctx context.Context, executor reports.Executor, req repor
 		return nil, err
 	}
 
-	projectedSink, err := reports.NewProjectionSink(executor, req.SelectedColumns, sink)
+	projectedSink, err := reports.NewProjectionSinkWithOptions(executor, req.SelectedColumns, sink, reports.ProjectionOptions{
+		AllowSensitive: req.AllowSensitive,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +146,9 @@ func runRawInMemoryReport(ctx context.Context, executor reports.Executor, req re
 		return nil, err
 	}
 
-	if _, err := reports.NewProjectionSink(executor, req.SelectedColumns, &MemorySink{}); err != nil {
+	if _, err := reports.NewProjectionSinkWithOptions(executor, req.SelectedColumns, &MemorySink{}, reports.ProjectionOptions{
+		AllowSensitive: req.AllowSensitive,
+	}); err != nil {
 		return nil, err
 	}
 
@@ -254,7 +260,9 @@ func exportReport(ctx context.Context, executor reports.Executor, req reports.Re
 	if err := executor.Validate(ctx, req); err != nil {
 		return nil, "", "", err
 	}
-	projectedSink, err := reports.NewProjectionSink(executor, req.SelectedColumns, sink)
+	projectedSink, err := reports.NewProjectionSinkWithOptions(executor, req.SelectedColumns, sink, reports.ProjectionOptions{
+		AllowSensitive: req.AllowSensitive,
+	})
 	if err != nil {
 		return nil, "", "", err
 	}

@@ -19,6 +19,7 @@ type ReportRequest struct {
 	OfficeID           *primitive.ObjectID    `json:"office_id,omitempty"`
 	Parameters         map[string]interface{} `json:"parameters"`
 	SelectedColumns    []string               `json:"selected_columns,omitempty"`
+	AllowSensitive     bool                   `json:"allow_sensitive_columns,omitempty"`
 	DefinitionSnapshot map[string]interface{} `json:"definition_snapshot"`
 	TraceID            string                 `json:"trace_id"`
 	CreatedAt          time.Time              `json:"created_at"`

@@ -8,12 +8,34 @@ type ProjectionSink struct {
 	wrote   bool
 }
 
+type ProjectionOptions struct {
+	AllowSensitive bool
+}
+
 func NewProjectionSink(executor Executor, selectedColumns []string, inner RowSink) (RowSink, error) {
+	return NewProjectionSinkWithOptions(executor, selectedColumns, inner, ProjectionOptions{
+		AllowSensitive: true,
+	})
+}
+
+func NewProjectionSinkWithOptions(executor Executor, selectedColumns []string, inner RowSink, options ProjectionOptions) (RowSink, error) {
+	provider, ok := executor.(ColumnProvider)
 	if len(selectedColumns) == 0 {
-		return inner, nil
+		if options.AllowSensitive {
+			return inner, nil
+		}
+		if !ok {
+			return inner, nil
+		}
+		indexes := make([]int, 0)
+		for index, column := range provider.Columns() {
+			if !column.Sensitive {
+				indexes = append(indexes, index)
+			}
+		}
+		return &ProjectionSink{inner: inner, indexes: indexes}, nil
 	}
 
-	provider, ok := executor.(ColumnProvider)
 	if !ok {
 		return nil, fmt.Errorf("report %s v%d does not support column selection", executor.Key(), executor.Version())
 	}
@@ -33,6 +55,9 @@ func NewProjectionSink(executor Executor, selectedColumns []string, inner RowSin
 		index, ok := columnIndexByKey[key]
 		if !ok {
 			return nil, fmt.Errorf("invalid selected column: %s", key)
+		}
+		if columns[index].Sensitive && !options.AllowSensitive {
+			return nil, fmt.Errorf("selected column requires sensitive report permission: %s", key)
 		}
 		seen[key] = struct{}{}
 		indexes = append(indexes, index)
