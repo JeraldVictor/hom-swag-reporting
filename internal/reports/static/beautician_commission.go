@@ -51,7 +51,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	}
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
-	match := orderReportBaseMatch(startDate, endDate, startDateKey, endDateKey)
+	match := orderBookingDateOnlyMatch(startDateKey, endDateKey)
 	match["status"] = bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}}
 	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
 		match["beautician_id"] = staffID
@@ -72,20 +72,24 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
 			"total_special_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
+				"$commission_snapshot.special_commission",
 				"$commission_details.special_commission",
 				0,
 			}})},
 			"total_general_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
+				"$commission_snapshot.general_commission",
 				"$commission_details.general_commission",
 				0,
 			}})},
 			"total_upgrade_addon_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
+				"$commission_snapshot.upgrade_addon_commission",
 				"$commission_details.upgrade_addon_commission",
 				0,
 			}})},
 			"total_revenue": bson.M{
 				"$sum": completedOnlyExpr(bson.M{
 					"$ifNull": bson.A{
+						"$commission_snapshot.order_cost",
 						"$order_cost",
 						"$revenue",
 					},
@@ -167,9 +171,11 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		"Target 2 Achieved",
 		"Special Commission",
 		"Payable General Commission",
+		"Potential General Commission",
 		"Upgrade/Add-on Commission",
 		"Refunded",
 		"Target 2 Bonus",
+		"Potential Target 2 Bonus",
 		"Leaderboard Rank",
 		"Leaderboard Bonus",
 		"Total Commission",
@@ -207,9 +213,11 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			formatBool(target2Achieved),
 			fmt.Sprintf("%.2f", result.TotalSpecialCommission),
 			fmt.Sprintf("%.2f", payableGeneralCommission),
+			fmt.Sprintf("%.2f", result.TotalGeneralCommission),
 			fmt.Sprintf("%.2f", result.TotalUpgradeAddonCommission),
 			fmt.Sprintf("%.2f", result.TotalRefund),
 			fmt.Sprintf("%.2f", payableTarget2Bonus),
+			fmt.Sprintf("%.2f", target2Bonus),
 			formatRank(leaderboard.Rank),
 			fmt.Sprintf("%.2f", leaderboard.Bonus),
 			fmt.Sprintf("%.2f", totalCommission),
@@ -256,7 +264,7 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 		return revenueByBeautician, nil
 	}
 
-	match := orderReportBaseMatch(startDate, endDate, startDateKey, endDateKey)
+	match := orderBookingDateOnlyMatch(startDateKey, endDateKey)
 	match["beautician_id"] = bson.M{"$in": beauticianIDs}
 	match["status"] = "completed"
 	if !officeID.IsZero() {
@@ -268,6 +276,7 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
 			"total_revenue": bson.M{"$sum": bson.M{"$ifNull": bson.A{
+				"$commission_snapshot.order_cost",
 				"$order_cost",
 				"$revenue",
 			}}},

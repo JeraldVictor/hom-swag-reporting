@@ -68,7 +68,12 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		match["office_id"] = officeID
 	}
 
-	payableDistanceExpr := tripPayableDistanceExpr()
+	legacyPayableDistanceExpr := tripPayableDistanceExpr()
+	payableDistanceExpr := bson.M{"$cond": bson.A{
+		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.payable_distance_km", 0}}, 0}},
+		"$payable_snapshot.payable_distance_km",
+		legacyPayableDistanceExpr,
+	}}
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
 	}
@@ -84,21 +89,29 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 				"$rider_id",
 			}},
 			"payable_distance_km": payableDistanceExpr,
-			"petrol_payable":      tripPetrolPayableExpr(payableDistanceExpr),
+			"petrol_payable": bson.M{"$cond": bson.A{
+				bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.petrol_payable", 0}}, 0}},
+				"$payable_snapshot.petrol_payable",
+				tripPetrolPayableExpr(payableDistanceExpr),
+			}},
 		}}},
 		bson.D{{Key: "$addFields", Value: bson.M{
-			"commission_payable": bson.M{
-				"$cond": bson.A{
-					"$is_commission_applicable",
-					bson.M{
-						"$ifNull": bson.A{
-							"$commission_amount",
-							"$payable_distance_km",
+			"commission_payable": bson.M{"$cond": bson.A{
+				bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.commission_payable", 0}}, 0}},
+				"$payable_snapshot.commission_payable",
+				bson.M{
+					"$cond": bson.A{
+						"$is_commission_applicable",
+						bson.M{
+							"$ifNull": bson.A{
+								"$commission_amount",
+								"$payable_distance_km",
+							},
 						},
+						0,
 					},
-					0,
 				},
-			},
+			}},
 		}}},
 		bson.D{{Key: "$group", Value: bson.M{
 			"_id":                "$allowance_worker_id",

@@ -55,7 +55,12 @@ func (e *PetrolWeeklyExecutor) Run(ctx context.Context, req reports.Request, sin
 		match["office_id"] = officeID
 	}
 
-	payableDistanceExpr := tripPayableDistanceExpr()
+	legacyPayableDistanceExpr := tripPayableDistanceExpr()
+	payableDistanceExpr := bson.M{"$cond": bson.A{
+		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.payable_distance_km", 0}}, 0}},
+		"$payable_snapshot.payable_distance_km",
+		legacyPayableDistanceExpr,
+	}}
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
 	}
@@ -71,7 +76,11 @@ func (e *PetrolWeeklyExecutor) Run(ctx context.Context, req reports.Request, sin
 				"$rider_id",
 			}},
 			"payable_distance_km": payableDistanceExpr,
-			"petrol_payable":      tripPetrolPayableExpr(payableDistanceExpr),
+			"petrol_payable": bson.M{"$cond": bson.A{
+				bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.petrol_payable", 0}}, 0}},
+				"$payable_snapshot.petrol_payable",
+				tripPetrolPayableExpr(payableDistanceExpr),
+			}},
 		}}},
 		bson.D{{Key: "$group", Value: bson.M{
 			"_id":            "$allowance_worker_id",

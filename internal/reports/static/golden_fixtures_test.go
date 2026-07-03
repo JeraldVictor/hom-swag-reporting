@@ -226,6 +226,35 @@ func TestGoldenBeauticianCommissionFixturesOnlyCompletedOrdersContributeToCommis
 	assertEvaluatedMoney(t, "cancelled refund still reported", paymentRefundExpr(), cancelledAndRefunded, 300)
 }
 
+func TestGoldenBeauticianCommissionSnapshotWinsOverLegacyFields(t *testing.T) {
+	completed := map[string]any{
+		"status": "completed",
+		"commission_snapshot": map[string]any{
+			"special_commission":       90,
+			"general_commission":       140,
+			"upgrade_addon_commission": 35,
+			"order_cost":               1750,
+		},
+		"order_cost": 1500,
+		"commission_details": map[string]any{
+			"special_commission":       75,
+			"general_commission":       120,
+			"upgrade_addon_commission": 45,
+		},
+	}
+
+	assertEvaluatedMoney(t, "snapshot special commission", completedOnlyExpr(bson.M{"$ifNull": bson.A{
+		"$commission_snapshot.special_commission",
+		"$commission_details.special_commission",
+		0,
+	}}), completed, 90)
+	assertEvaluatedMoney(t, "snapshot revenue", completedOnlyExpr(bson.M{"$ifNull": bson.A{
+		"$commission_snapshot.order_cost",
+		"$order_cost",
+		"$revenue",
+	}}), completed, 1750)
+}
+
 func TestGoldenTripFixturesCoverPetrolAndCommissionPayableInputs(t *testing.T) {
 	fixtures := []struct {
 		name          string
@@ -276,6 +305,46 @@ func TestGoldenTripFixturesCoverPetrolAndCommissionPayableInputs(t *testing.T) {
 	}
 }
 
+func TestGoldenTripSnapshotWinsOverLegacyPayableInputs(t *testing.T) {
+	document := map[string]any{
+		"payable_snapshot": map[string]any{
+			"payable_distance_km": 11,
+			"petrol_payable":      44,
+			"commission_payable":  33,
+		},
+		"fare_calculation": map[string]any{
+			"trip_distance_km": 18,
+			"calculated_fare":  90,
+		},
+		"is_commission_applicable": true,
+		"commission_amount":        70,
+	}
+	distanceExpr := bson.M{"$cond": bson.A{
+		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.payable_distance_km", 0}}, 0}},
+		"$payable_snapshot.payable_distance_km",
+		tripPayableDistanceExpr(),
+	}}
+	commissionExpr := bson.M{"$cond": bson.A{
+		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.commission_payable", 0}}, 0}},
+		"$payable_snapshot.commission_payable",
+		bson.M{
+			"$cond": bson.A{
+				"$is_commission_applicable",
+				bson.M{"$ifNull": bson.A{"$commission_amount", "$payable_distance_km"}},
+				0,
+			},
+		},
+	}}
+
+	assertEvaluatedMoney(t, "snapshot distance", distanceExpr, document, 11)
+	assertEvaluatedMoney(t, "snapshot petrol", bson.M{"$cond": bson.A{
+		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.petrol_payable", 0}}, 0}},
+		"$payable_snapshot.petrol_payable",
+		tripPetrolPayableExpr(distanceExpr),
+	}}, document, 44)
+	assertEvaluatedMoney(t, "snapshot commission", commissionExpr, document, 33)
+}
+
 func TestGoldenInclusionRulesKeepLegacyRecordsAndExcludeExplicitDeletes(t *testing.T) {
 	orderMatch := orderReportBaseMatch(
 		time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
@@ -287,6 +356,21 @@ func TestGoldenInclusionRulesKeepLegacyRecordsAndExcludeExplicitDeletes(t *testi
 
 	tripMatch := payableTripBaseMatch("2026-07-01", "2026-07-31")
 	assertNotExplicitlyDeletedRule(t, tripMatch["is_deleted"])
+}
+
+func TestGoldenCommissionOrderMatchUsesBookingDateOnly(t *testing.T) {
+	match := orderBookingDateOnlyMatch("2026-07-01", "2026-07-31")
+
+	if _, exists := match["service_date"]; exists {
+		t.Fatalf("commission order match should not include service_date: %#v", match)
+	}
+	bookingDate, ok := match["booking_info.date"].(bson.M)
+	if !ok {
+		t.Fatalf("booking_info.date match missing: %#v", match)
+	}
+	if bookingDate["$gte"] != "2026-07-01" || bookingDate["$lte"] != "2026-07-31" {
+		t.Fatalf("booking date range = %#v", bookingDate)
+	}
 }
 
 func assertNotExplicitlyDeletedRule(t *testing.T, rule any) {

@@ -33,3 +33,13 @@ func orderReportDateClauses(startDate time.Time, endDate time.Time, matchStart s
 		bson.M{"booking_info.date": bson.M{"$gte": matchStart, "$lte": matchEnd}},
 	}
 }
+
+func orderBookingDateOnlyMatch(matchStart string, matchEnd string) bson.M {
+	return bson.M{
+		"is_deleted": bson.M{"$ne": true},
+		"booking_info.date": bson.M{
+			"$gte": matchStart,
+			"$lte": matchEnd,
+		},
+	}
+}
