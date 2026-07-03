@@ -27,7 +27,7 @@ func (e *PetrolWeeklyExecutor) Version() int {
 }
 
 func (e *PetrolWeeklyExecutor) Columns() []reports.Column {
-	return petrolWeeklyColumns
+	return withColumnDescriptions(petrolWeeklyColumns)
 }
 
 func (e *PetrolWeeklyExecutor) Validate(ctx context.Context, req reports.Request) error {

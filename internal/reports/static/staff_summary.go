@@ -27,7 +27,7 @@ func (e *StaffSummaryExecutor) Version() int {
 }
 
 func (e *StaffSummaryExecutor) Columns() []reports.Column {
-	return staffSummaryColumns
+	return withColumnDescriptions(staffSummaryColumns)
 }
 
 func (e *StaffSummaryExecutor) Validate(ctx context.Context, req reports.Request) error {

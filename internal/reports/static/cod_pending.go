@@ -26,7 +26,7 @@ func (e *CODPendingExecutor) Version() int {
 }
 
 func (e *CODPendingExecutor) Columns() []reports.Column {
-	return codPendingColumns
+	return withColumnDescriptions(codPendingColumns)
 }
 
 func (e *CODPendingExecutor) Validate(ctx context.Context, req reports.Request) error {

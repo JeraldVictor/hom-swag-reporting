@@ -92,3 +92,58 @@ var codPendingColumns = []reports.Column{
 	{Key: "cod_status", Label: "COD Status", Type: "string", SourcePath: "cod_status", DefaultVisible: true, Filterable: true},
 	{Key: "cod_collected_amount", Label: "COD Collected Amount", Type: "currency", SourcePath: "cod_collected_amount", FormulaID: "payment.cod_pending_settlement", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
 }
+
+var columnDescriptions = map[string]string{
+	"beautician_pan":                  "Beautician PAN is sensitive and is shown only to users with report download permission.",
+	"bank_transfer":                   "Total positive payments recorded as bank transfer for the order. Refunds, tips, and cancellation fee labels are not counted here.",
+	"cash":                            "Total positive cash or COD payments recorded for the order. Refunds, tips, and cancellation fee labels are not counted here.",
+	"cod_collected_amount":            "COD amount collected from the customer but still pending settlement.",
+	"commission_payable":              "Trip commission payable before leaderboard bonus is added.",
+	"convenience_fees":                "Convenience fee charged to the customer for this order.",
+	"coupon_discount":                 "Discount from coupons or offers after removing membership and special discounts from the total discount.",
+	"emp_code":                        "Employee code from the staff profile.",
+	"hygiene_fees":                    "Hygiene fee charged to the customer for this order.",
+	"leaderboard_bonus":               "Bonus added for the staff member's leaderboard position for the selected period.",
+	"leaderboard_rank":                "Rank assigned to the staff member for the selected report period.",
+	"membership_charges":              "Membership amount charged on this order, if any.",
+	"membership_discount":             "Discount given because of membership benefits.",
+	"net_receivable_bank":             "Online and bank transfer collections after removing payment gateway charges other than tip charges.",
+	"net_receivable_including_gst":    "Customer amount due for services and fees, including GST, after discounts. Tips are not included. For cancelled orders, only the cancellation charge is counted.",
+	"net_tips_payable":                "Tips collected from the customer after removing payment gateway charges on tips.",
+	"online":                          "Total positive UPI, card, wallet, online, or other digital payments recorded for the order. Refunds, tips, and cancellation fee labels are not counted here.",
+	"order_count":                     "Number of completed orders counted for the staff member in the selected period.",
+	"payable_amount":                  "Petrol amount payable for the selected period based on payable trip distance.",
+	"payable_general_commission":      "General commission payable after applying the report's commission rules.",
+	"payment_gateway_charges_others":  "Payment gateway charges applied to non-tip payments.",
+	"payment_gateway_charges_tips":    "Payment gateway charges applied to tip payments.",
+	"petrol_payable":                  "Petrol reimbursement payable for completed trips in the selected period.",
+	"refunded":                        "Total refunded amount recorded for the selected period.",
+	"special_commission":              "Special commission payable based on configured staff rules.",
+	"special_discount":                "One-time or manual discount applied to the order.",
+	"surge_charges":                   "Surge amount charged to the customer for this order.",
+	"target1_achieved":                "Shows whether the staff member met Target 1 for the selected period.",
+	"target2_achieved":                "Shows whether the staff member met Target 2 for the selected period.",
+	"target2_bonus":                   "Bonus payable when Target 2 is achieved.",
+	"tips":                            "Tip amount paid by the customer for the order.",
+	"total_commission":                "Total commission payable after adding eligible commission and bonus amounts.",
+	"total_discount_provided":         "Total discount given to the customer: membership discount plus special discount plus coupon discount.",
+	"total_distance_km":               "Total payable trip distance in kilometres for the selected period.",
+	"total_received":                  "Total customer payment received for the order. If payment history exists, only positive non-tip, non-cancellation-fee entries are counted; otherwise legacy paid amount fields are used.",
+	"total_receivable_including_tips": "Net receivable including GST plus customer tips.",
+	"total_revenue":                   "Completed order revenue counted for the staff member in the selected period.",
+	"total_services_cost":             "Service subtotal before fees, discounts, tips, and cancellation charges.",
+	"total_value":                     "Gross order value before discounts: service subtotal plus convenience, hygiene, surge, membership, and eligible cancellation charges.",
+	"trip_count":                      "Number of completed trips counted for the selected period.",
+	"upgrade_addon_commission":        "Commission payable for eligible upgrades or add-ons.",
+}
+
+func withColumnDescriptions(columns []reports.Column) []reports.Column {
+	described := make([]reports.Column, len(columns))
+	copy(described, columns)
+	for index := range described {
+		if description, ok := columnDescriptions[described[index].Key]; ok {
+			described[index].Description = description
+		}
+	}
+	return described
+}

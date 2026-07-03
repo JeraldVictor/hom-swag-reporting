@@ -29,7 +29,7 @@ func (e *DailySalesExecutor) Version() int {
 }
 
 func (e *DailySalesExecutor) Columns() []reports.Column {
-	return dailySalesColumns
+	return withColumnDescriptions(dailySalesColumns)
 }
 
 func (e *DailySalesExecutor) Validate(ctx context.Context, req reports.Request) error {
@@ -59,9 +59,7 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 
 	match := bson.M{
 		"is_deleted": false,
-		"$or": bson.A{
-			bson.M{"booking_info.date": bson.M{"$gte": matchStart, "$lte": matchEnd}},
-		},
+		"$or":        dailySalesDateClauses(startDate, endDate, matchStart, matchEnd),
 	}
 	if officeID, ok := dailySalesOfficeID(req.Parameters); ok {
 		match["office_id"] = officeID
@@ -308,6 +306,27 @@ func dailySalesStatuses(parameters map[string]interface{}) []interface{} {
 		return statuses
 	default:
 		return []interface{}{"completed"}
+	}
+}
+
+func dailySalesDateClauses(startDate time.Time, endDate time.Time, matchStart string, matchEnd string) bson.A {
+	return bson.A{
+		bson.M{"service_date": bson.M{"$gte": startDate, "$lte": endDate}},
+		bson.M{
+			"service_date": bson.M{"$exists": false},
+			"booking_info.date": bson.M{
+				"$gte": matchStart,
+				"$lte": matchEnd,
+			},
+		},
+		bson.M{
+			"service_date": nil,
+			"booking_info.date": bson.M{
+				"$gte": matchStart,
+				"$lte": matchEnd,
+			},
+		},
+		bson.M{"booking_info.date": bson.M{"$gte": matchStart, "$lte": matchEnd}},
 	}
 }
 

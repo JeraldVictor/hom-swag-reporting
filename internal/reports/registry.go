@@ -23,6 +23,7 @@ type Column struct {
 	Key                string
 	Label              string
 	Type               string
+	Description        string
 	Group              string
 	SourcePath         string
 	FormulaID          string

@@ -30,7 +30,7 @@ func (e *BeauticianCommissionExecutor) Version() int {
 }
 
 func (e *BeauticianCommissionExecutor) Columns() []reports.Column {
-	return beauticianCommissionColumns
+	return withColumnDescriptions(beauticianCommissionColumns)
 }
 
 func (e *BeauticianCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {

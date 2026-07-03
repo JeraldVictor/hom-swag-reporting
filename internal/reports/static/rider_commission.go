@@ -29,7 +29,7 @@ func (e *RiderCommissionExecutor) Version() int {
 }
 
 func (e *RiderCommissionExecutor) Columns() []reports.Column {
-	return riderCommissionColumns
+	return withColumnDescriptions(riderCommissionColumns)
 }
 
 func (e *RiderCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {
