@@ -34,13 +34,7 @@ func (e *BeauticianCommissionExecutor) Columns() []reports.Column {
 }
 
 func (e *BeauticianCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {
-	if _, ok := req.Parameters["start_date"]; !ok {
-		return fmt.Errorf("start_date is required")
-	}
-	if _, ok := req.Parameters["end_date"]; !ok {
-		return fmt.Errorf("end_date is required")
-	}
-	return nil
+	return validateReportDateRange(req.Parameters, parseReportDate)
 }
 
 func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Request, sink reports.RowSink) error {
@@ -57,14 +51,8 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	}
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
-	match := bson.M{
-		"booking_info.date": bson.M{
-			"$gte": startDateKey,
-			"$lte": endDateKey,
-		},
-		"is_deleted": false,
-		"status":     bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}},
-	}
+	match := orderReportBaseMatch(startDate, endDate, startDateKey, endDateKey)
+	match["status"] = bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}}
 	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
 		match["beautician_id"] = staffID
 	}
@@ -76,6 +64,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			return fmt.Errorf("invalid office_id: %w", err)
 		}
 		officeID = parsedOfficeID
+		match["office_id"] = officeID
 	}
 
 	pipeline := mongo.Pipeline{
@@ -112,10 +101,6 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			"as":           "beautician",
 		}}},
 		{{Key: "$unwind", Value: "$beautician"}},
-	}
-
-	if !officeID.IsZero() {
-		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{"beautician.office_id": officeID}}})
 	}
 
 	pipeline = append(pipeline, bson.D{{Key: "$project", Value: bson.M{
@@ -271,15 +256,9 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 		return revenueByBeautician, nil
 	}
 
-	match := bson.M{
-		"beautician_id": bson.M{"$in": beauticianIDs},
-		"booking_info.date": bson.M{
-			"$gte": startDateKey,
-			"$lte": endDateKey,
-		},
-		"is_deleted": false,
-		"status":     "completed",
-	}
+	match := orderReportBaseMatch(startDate, endDate, startDateKey, endDateKey)
+	match["beautician_id"] = bson.M{"$in": beauticianIDs}
+	match["status"] = "completed"
 	if !officeID.IsZero() {
 		match["office_id"] = officeID
 	}

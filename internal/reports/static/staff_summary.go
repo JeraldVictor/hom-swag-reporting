@@ -3,7 +3,6 @@ package static
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson"
@@ -31,21 +30,27 @@ func (e *StaffSummaryExecutor) Columns() []reports.Column {
 }
 
 func (e *StaffSummaryExecutor) Validate(ctx context.Context, req reports.Request) error {
-	if _, ok := req.Parameters["start_date"]; !ok {
-		return fmt.Errorf("start_date is required")
-	}
-	if _, ok := req.Parameters["end_date"]; !ok {
-		return fmt.Errorf("end_date is required")
-	}
-	return nil
+	return validateReportDateRange(req.Parameters, parseReportDate)
 }
 
 func (e *StaffSummaryExecutor) Run(ctx context.Context, req reports.Request, sink reports.RowSink) error {
-	startDateStr := req.Parameters["start_date"].(string)
-	endDateStr := req.Parameters["end_date"].(string)
+	startDateStr, err := reportStringParam(req.Parameters, "start_date")
+	if err != nil {
+		return err
+	}
+	endDateStr, err := reportStringParam(req.Parameters, "end_date")
+	if err != nil {
+		return err
+	}
 
-	startDate, _ := time.Parse(time.RFC3339, startDateStr)
-	endDate, _ := time.Parse(time.RFC3339, endDateStr)
+	startDate, err := parseReportDate(startDateStr, false)
+	if err != nil {
+		return fmt.Errorf("invalid start_date: %w", err)
+	}
+	endDate, err := parseReportDate(endDateStr, true)
+	if err != nil {
+		return fmt.Errorf("invalid end_date: %w", err)
+	}
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"is_deleted": false}}},

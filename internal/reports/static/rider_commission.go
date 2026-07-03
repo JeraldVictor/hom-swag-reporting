@@ -33,13 +33,7 @@ func (e *RiderCommissionExecutor) Columns() []reports.Column {
 }
 
 func (e *RiderCommissionExecutor) Validate(ctx context.Context, req reports.Request) error {
-	if _, ok := req.Parameters["start_date"]; !ok {
-		return fmt.Errorf("start_date is required")
-	}
-	if _, ok := req.Parameters["end_date"]; !ok {
-		return fmt.Errorf("end_date is required")
-	}
-	return nil
+	return validateReportDateRange(req.Parameters, parseReportDate)
 }
 
 func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, sink reports.RowSink) error {
@@ -56,19 +50,12 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
-	match := bson.M{
-		"date": bson.M{
-			"$gte": startDateKey,
-			"$lte": endDateKey,
-		},
-		"is_deleted":   false,
-		"kanban_state": "trip_completed",
-	}
+	match := payableTripBaseMatch(startDateKey, endDateKey)
 	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
-		match["$or"] = bson.A{
+		match["$and"] = append(match["$and"].(bson.A), bson.M{"$or": bson.A{
 			bson.M{"rider_id": staffID},
 			bson.M{"beautician_id": staffID, "is_self_drive": true},
-		}
+		}})
 	}
 
 	var officeID primitive.ObjectID
@@ -78,27 +65,28 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 			return fmt.Errorf("invalid office_id: %w", err)
 		}
 		officeID = parsedOfficeID
+		match["office_id"] = officeID
 	}
 
+	payableDistanceExpr := tripPayableDistanceExpr()
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
-		{{Key: "$addFields", Value: bson.M{
-			"payable_distance_km": bson.M{
-				"$cond": bson.A{
-					bson.M{"$gt": bson.A{"$fare_calculation.trip_distance_km", 0}},
-					"$fare_calculation.trip_distance_km",
-					bson.M{
-						"$cond": bson.A{
-							"$is_two_way",
-							bson.M{"$multiply": bson.A{bson.M{"$ifNull": bson.A{"$auto_distance_km", 0}}, 2}},
-							bson.M{"$ifNull": bson.A{"$auto_distance_km", 0}},
-						},
-					},
-				},
-			},
-			"petrol_payable": bson.M{"$ifNull": bson.A{"$fare_calculation.calculated_fare", 0}},
+	}
+	pipeline = append(pipeline, tripOfficeLookupStages()...)
+	pipeline = append(pipeline,
+		bson.D{{Key: "$addFields", Value: bson.M{
+			"allowance_worker_id": bson.M{"$cond": bson.A{
+				bson.M{"$and": bson.A{
+					"$is_self_drive",
+					bson.M{"$ne": bson.A{"$beautician_id", nil}},
+				}},
+				"$beautician_id",
+				"$rider_id",
+			}},
+			"payable_distance_km": payableDistanceExpr,
+			"petrol_payable":      tripPetrolPayableExpr(payableDistanceExpr),
 		}}},
-		{{Key: "$addFields", Value: bson.M{
+		bson.D{{Key: "$addFields", Value: bson.M{
 			"commission_payable": bson.M{
 				"$cond": bson.A{
 					"$is_commission_applicable",
@@ -112,37 +100,45 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 				},
 			},
 		}}},
-		{{Key: "$group", Value: bson.M{
-			"_id":                "$rider_id",
+		bson.D{{Key: "$group", Value: bson.M{
+			"_id":                "$allowance_worker_id",
 			"total_distance_km":  bson.M{"$sum": "$payable_distance_km"},
 			"petrol_payable":     bson.M{"$sum": "$petrol_payable"},
 			"commission_payable": bson.M{"$sum": "$commission_payable"},
 			"trip_count":         bson.M{"$sum": 1},
 		}}},
-		{{Key: "$match", Value: bson.M{
+		bson.D{{Key: "$match", Value: bson.M{
 			"_id": bson.M{"$ne": nil},
 		}}},
-		{{Key: "$lookup", Value: bson.M{
+		bson.D{{Key: "$lookup", Value: bson.M{
 			"from":         "riders",
 			"localField":   "_id",
 			"foreignField": "_id",
 			"as":           "rider",
 		}}},
-		{{Key: "$unwind", Value: "$rider"}},
-	}
-
-	if !officeID.IsZero() {
-		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{"rider.office_id": officeID}}})
-	}
-
-	pipeline = append(pipeline, bson.D{{Key: "$project", Value: bson.M{
-		"name":               "$rider.name",
-		"emp_code":           "$rider.emp_code",
-		"total_distance_km":  1,
-		"petrol_payable":     1,
-		"commission_payable": 1,
-		"trip_count":         1,
-	}}})
+		bson.D{{Key: "$unwind", Value: bson.M{
+			"path":                       "$rider",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+		bson.D{{Key: "$lookup", Value: bson.M{
+			"from":         "beauticians",
+			"localField":   "_id",
+			"foreignField": "_id",
+			"as":           "beautician",
+		}}},
+		bson.D{{Key: "$unwind", Value: bson.M{
+			"path":                       "$beautician",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+		bson.D{{Key: "$project", Value: bson.M{
+			"name":               bson.M{"$ifNull": bson.A{"$rider.name", "$beautician.name"}},
+			"emp_code":           bson.M{"$ifNull": bson.A{"$rider.emp_code", "$beautician.emp_code"}},
+			"total_distance_km":  1,
+			"petrol_payable":     1,
+			"commission_payable": 1,
+			"trip_count":         1,
+		}}},
+	)
 
 	if req.Limit > 0 {
 		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: req.Limit}})

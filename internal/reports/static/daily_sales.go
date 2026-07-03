@@ -33,13 +33,7 @@ func (e *DailySalesExecutor) Columns() []reports.Column {
 }
 
 func (e *DailySalesExecutor) Validate(ctx context.Context, req reports.Request) error {
-	if _, ok := req.Parameters["start_date"]; !ok {
-		return fmt.Errorf("start_date is required")
-	}
-	if _, ok := req.Parameters["end_date"]; !ok {
-		return fmt.Errorf("end_date is required")
-	}
-	return nil
+	return validateReportDateRange(req.Parameters, parseDailySalesDate)
 }
 
 func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink reports.RowSink) error {
@@ -57,11 +51,10 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 	matchStart := startDate.Format("2006-01-02")
 	matchEnd := endDate.Format("2006-01-02")
 
-	match := bson.M{
-		"is_deleted": false,
-		"$or":        dailySalesDateClauses(startDate, endDate, matchStart, matchEnd),
-	}
-	if officeID, ok := dailySalesOfficeID(req.Parameters); ok {
+	match := orderReportBaseMatch(startDate, endDate, matchStart, matchEnd)
+	if officeID, ok, err := dailySalesOfficeID(req.Parameters); err != nil {
+		return err
+	} else if ok {
 		match["office_id"] = officeID
 	}
 	if statuses := dailySalesStatuses(req.Parameters); len(statuses) > 0 {
@@ -165,13 +158,7 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 			return err
 		}
 		values := row.values()
-		for index, value := range values {
-			if index >= 9 {
-				if amount, ok := value.(float64); ok {
-					totals[index] += amount
-				}
-			}
-		}
+		addDailySalesTotals(totals, values)
 		if err := sink.WriteRow(values); err != nil {
 			return err
 		}
@@ -180,16 +167,7 @@ func (e *DailySalesExecutor) Run(ctx context.Context, req reports.Request, sink 
 		return err
 	}
 
-	totalRow := make([]interface{}, len(header))
-	totalRow[0] = "Total"
-	for index := 1; index < len(totalRow); index++ {
-		if index >= 9 {
-			totalRow[index] = money2(totals[index])
-		} else {
-			totalRow[index] = ""
-		}
-	}
-	return sink.WriteRow(totalRow)
+	return sink.WriteRow(dailySalesTotalRow(len(header), totals))
 }
 
 type dailySalesRow struct {
@@ -272,16 +250,39 @@ func (r dailySalesRow) values() []interface{} {
 	}
 }
 
-func dailySalesOfficeID(parameters map[string]interface{}) (primitive.ObjectID, bool) {
+func addDailySalesTotals(totals []float64, values []interface{}) {
+	for index, value := range values {
+		if index >= 9 {
+			if amount, ok := value.(float64); ok {
+				totals[index] += amount
+			}
+		}
+	}
+}
+
+func dailySalesTotalRow(headerLen int, totals []float64) []interface{} {
+	totalRow := make([]interface{}, headerLen)
+	totalRow[0] = "Total"
+	for index := 1; index < len(totalRow); index++ {
+		if index >= 9 {
+			totalRow[index] = money2(totals[index])
+		} else {
+			totalRow[index] = ""
+		}
+	}
+	return totalRow
+}
+
+func dailySalesOfficeID(parameters map[string]interface{}) (primitive.ObjectID, bool, error) {
 	officeIDStr, ok := parameters["office_id"].(string)
 	if !ok || officeIDStr == "" {
-		return primitive.NilObjectID, false
+		return primitive.NilObjectID, false, nil
 	}
 	officeID, err := primitive.ObjectIDFromHex(officeIDStr)
 	if err != nil {
-		return primitive.NilObjectID, false
+		return primitive.NilObjectID, false, fmt.Errorf("invalid office_id: %w", err)
 	}
-	return officeID, true
+	return officeID, true, nil
 }
 
 func dailySalesStatuses(parameters map[string]interface{}) []interface{} {
@@ -306,27 +307,6 @@ func dailySalesStatuses(parameters map[string]interface{}) []interface{} {
 		return statuses
 	default:
 		return []interface{}{"completed"}
-	}
-}
-
-func dailySalesDateClauses(startDate time.Time, endDate time.Time, matchStart string, matchEnd string) bson.A {
-	return bson.A{
-		bson.M{"service_date": bson.M{"$gte": startDate, "$lte": endDate}},
-		bson.M{
-			"service_date": bson.M{"$exists": false},
-			"booking_info.date": bson.M{
-				"$gte": matchStart,
-				"$lte": matchEnd,
-			},
-		},
-		bson.M{
-			"service_date": nil,
-			"booking_info.date": bson.M{
-				"$gte": matchStart,
-				"$lte": matchEnd,
-			},
-		},
-		bson.M{"booking_info.date": bson.M{"$gte": matchStart, "$lte": matchEnd}},
 	}
 }
 

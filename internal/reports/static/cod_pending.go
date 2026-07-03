@@ -30,13 +30,7 @@ func (e *CODPendingExecutor) Columns() []reports.Column {
 }
 
 func (e *CODPendingExecutor) Validate(ctx context.Context, req reports.Request) error {
-	if _, ok := req.Parameters["start_date"]; !ok {
-		return fmt.Errorf("start_date is required")
-	}
-	if _, ok := req.Parameters["end_date"]; !ok {
-		return fmt.Errorf("end_date is required")
-	}
-	return nil
+	return validateReportDateRange(req.Parameters, parseDailySalesDate)
 }
 
 func (e *CODPendingExecutor) Run(ctx context.Context, req reports.Request, sink reports.RowSink) error {
@@ -52,15 +46,16 @@ func (e *CODPendingExecutor) Run(ctx context.Context, req reports.Request, sink 
 		return fmt.Errorf("invalid end_date: %w", err)
 	}
 
-	match := bson.M{
-		"is_deleted": false,
-		"booking_info.date": bson.M{
-			"$gte": startDate.Format("2006-01-02"),
-			"$lte": endDate.Format("2006-01-02"),
-		},
-		"cod_status": bson.M{"$in": bson.A{"collected", "pending_return"}},
-	}
-	if officeID, ok := dailySalesOfficeID(req.Parameters); ok {
+	match := orderReportBaseMatch(
+		startDate,
+		endDate,
+		startDate.Format("2006-01-02"),
+		endDate.Format("2006-01-02"),
+	)
+	match["cod_status"] = bson.M{"$in": bson.A{"collected", "pending_return"}}
+	if officeID, ok, err := dailySalesOfficeID(req.Parameters); err != nil {
+		return err
+	} else if ok {
 		match["office_id"] = officeID
 	}
 
