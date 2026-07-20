@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -128,6 +129,53 @@ func TestRepositoryLoadOrderSourcesRequiresCompletedStatus(t *testing.T) {
 		status, ok := filter.Lookup("status").StringValueOK()
 		if !ok || status != "completed" {
 			t.Fatalf("order source filter can admit non-completed statuses: %v", filter)
+		}
+	})
+}
+
+func TestRepositoryLoadOrderSourcesIgnoresBSONServiceDate(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	office, worker := primitive.NewObjectID(), primitive.NewObjectID()
+	mt.Run("booking date is the sole period date", func(mt *mtest.T) {
+		ns := mt.DB.Name() + ".orders"
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, ns, mtest.FirstBatch, bson.D{
+			{Key: "_id", Value: primitive.NewObjectID()},
+			{Key: "office_id", Value: office},
+			{Key: "beautician_id", Value: worker},
+			{Key: "status", Value: "completed"},
+			{Key: "booking_info", Value: bson.D{{Key: "date", Value: "2026-07-15"}}},
+			// This is the production shape that previously failed decoding into a string.
+			{Key: "service_date", Value: time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)},
+		}))
+
+		rows, err := NewRepository(mt.DB).LoadOrderSources(context.Background(), office, "2026-07-01", "2026-07-31")
+		if err != nil || len(rows) != 1 || rows[0].BookingInfo.Date != "2026-07-15" {
+			t.Fatalf("rows=%+v err=%v", rows, err)
+		}
+
+		started := mt.GetStartedEvent()
+		if started == nil {
+			t.Fatal("missing find command")
+		}
+		filter, ok := started.Command.Lookup("filter").DocumentOK()
+		if !ok {
+			t.Fatalf("find command has no filter: %v", started.Command)
+		}
+		if filter.Lookup("service_date").Type != 0 {
+			t.Fatalf("order source filter must not use service_date: %v", filter)
+		}
+		if filter.Lookup("booking_info.date").Type == 0 {
+			t.Fatalf("order source filter must use booking_info.date: %v", filter)
+		}
+		projection, ok := started.Command.Lookup("projection").DocumentOK()
+		if !ok {
+			t.Fatalf("find command has no projection: %v", started.Command)
+		}
+		if projection.Lookup("service_date").Type != 0 {
+			t.Fatalf("order source projection must not decode service_date: %v", projection)
+		}
+		if projection.Lookup("booking_info.date").Type == 0 {
+			t.Fatalf("order source projection must include booking_info.date: %v", projection)
 		}
 	})
 }

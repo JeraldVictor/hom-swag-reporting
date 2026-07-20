@@ -208,8 +208,8 @@ func TestProcessorMaterializesOrdersAndTrips(t *testing.T) {
 		job:     RebuildJob{ID: primitive.NewObjectID(), OfficeID: office, RequestedBy: primitive.NewObjectID(), Scope: "all", StartDate: "2026-07-01", EndDate: "2026-07-31"},
 		targets: []WorkerTarget{{WorkerID: worker, Target1: 100}},
 		orders: []OrderSource{
-			{ID: orderID, OfficeID: office, BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-15", Snapshot: &CommissionSnapshot{OrderCost: float(150), SpecialCommission: float(10), GeneralCommission: float(20), UpgradeAddonCommission: float(5), IsPaid: true}},
-			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-06-30", Snapshot: &CommissionSnapshot{OrderCost: float(10)}},
+			{ID: orderID, OfficeID: office, BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-15"}, Snapshot: &CommissionSnapshot{OrderCost: float(150), SpecialCommission: float(10), GeneralCommission: float(20), UpgradeAddonCommission: float(5), IsPaid: true}},
+			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-06-30"}, Snapshot: &CommissionSnapshot{OrderCost: float(10)}},
 		},
 		trips:  []TripSource{{ID: tripID, OfficeID: office, RiderID: &rider, Date: "2026-07-16", Snapshot: &PayableSnapshot{CommissionPayable: float(7), PetrolPayable: float(8)}}},
 		prizes: LeaderboardPrizes{},
@@ -230,8 +230,8 @@ func TestProcessorMaterializesTarget2BonusWithImmutableInputs(t *testing.T) {
 		targets:      []WorkerTarget{{WorkerID: worker, Target1: 100, Target2: 200}},
 		target2Bonus: 50,
 		orders: []OrderSource{
-			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-02", Snapshot: &CommissionSnapshot{OrderCost: float(125)}},
-			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-25", Snapshot: &CommissionSnapshot{OrderCost: float(75)}},
+			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-02"}, Snapshot: &CommissionSnapshot{OrderCost: float(125)}},
+			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-25"}, Snapshot: &CommissionSnapshot{OrderCost: float(75)}},
 		},
 	}
 	if _, err := NewProcessor(b).ProcessNext(context.Background()); err != nil {
@@ -255,7 +255,7 @@ func TestProcessorMaterializesTarget2BonusWithImmutableInputs(t *testing.T) {
 
 func TestProcessorDoesNotMaterializeUnearnedTarget2Bonus(t *testing.T) {
 	worker := primitive.NewObjectID()
-	validOrder := OrderSource{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-15", Snapshot: &CommissionSnapshot{OrderCost: float(199)}}
+	validOrder := OrderSource{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-15"}, Snapshot: &CommissionSnapshot{OrderCost: float(199)}}
 	tests := []struct {
 		name   string
 		target float64
@@ -263,9 +263,9 @@ func TestProcessorDoesNotMaterializeUnearnedTarget2Bonus(t *testing.T) {
 		orders []OrderSource
 	}{
 		{name: "target not reached", target: 200, bonus: 50, orders: []OrderSource{validOrder}},
-		{name: "target not configured", target: 0, bonus: 50, orders: []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-15", Snapshot: &CommissionSnapshot{OrderCost: float(500)}}}},
-		{name: "office bonus zero", target: 100, bonus: 0, orders: []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-15", Snapshot: &CommissionSnapshot{OrderCost: float(500)}}}},
-		{name: "incomplete monthly revenue", target: 100, bonus: 50, orders: []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-15", Snapshot: nil}}},
+		{name: "target not configured", target: 0, bonus: 50, orders: []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-15"}, Snapshot: &CommissionSnapshot{OrderCost: float(500)}}}},
+		{name: "office bonus zero", target: 100, bonus: 0, orders: []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-15"}, Snapshot: &CommissionSnapshot{OrderCost: float(500)}}}},
+		{name: "incomplete monthly revenue", target: 100, bonus: 50, orders: []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-15"}, Snapshot: nil}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -311,7 +311,7 @@ func TestProcessorReturnsTarget2BonusWriteFailure(t *testing.T) {
 		target2Bonus: 25,
 		putErr:       errors.New("write failed"),
 		orders: []OrderSource{{
-			ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-10",
+			ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-10"},
 			Snapshot: &CommissionSnapshot{OrderCost: float(100), SpecialCommission: float(0), GeneralCommission: float(0), UpgradeAddonCommission: float(0)},
 		}},
 	}
@@ -325,7 +325,7 @@ func TestProcessorNeverMaterializesNonCompletedOrders(t *testing.T) {
 	orders := make([]OrderSource, 0, 5)
 	for _, status := range []string{"cancelled", "cancelled_and_refunded", "refunded", "ongoing", ""} {
 		orders = append(orders, OrderSource{
-			ID: primitive.NewObjectID(), BeauticianID: worker, Status: status, ServiceDate: "2026-07-15",
+			ID: primitive.NewObjectID(), BeauticianID: worker, Status: status, BookingInfo: OrderBookingInfo{Date: "2026-07-15"},
 			Snapshot: &CommissionSnapshot{OrderCost: float(500), SpecialCommission: float(50), GeneralCommission: float(50), UpgradeAddonCommission: float(50)},
 		})
 	}
@@ -342,25 +342,24 @@ func TestProcessorNeverMaterializesNonCompletedOrders(t *testing.T) {
 	}
 }
 
-func TestOrderDatePrefersBookingDateAndFallsBackToServiceDate(t *testing.T) {
-	order := OrderSource{ServiceDate: "2026-07-20"}
-	order.BookingInfo.Date = "2026-07-10"
+func TestOrderDateUsesBookingDateOnly(t *testing.T) {
+	order := OrderSource{BookingInfo: OrderBookingInfo{Date: "2026-07-10"}}
 	if got := orderDate(order); got != "2026-07-10" {
 		t.Fatalf("orderDate()=%q, want booking date", got)
 	}
 	order.BookingInfo.Date = ""
-	if got := orderDate(order); got != "2026-07-20" {
-		t.Fatalf("orderDate()=%q, want service-date fallback", got)
+	if got := orderDate(order); got != "" {
+		t.Fatalf("orderDate()=%q, want no legacy fallback", got)
 	}
 }
 
 func TestProcessorAssignsOrderToBookingDateWhenDatesDiffer(t *testing.T) {
 	worker := primitive.NewObjectID()
 	order := OrderSource{
-		ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-08-02",
-		Snapshot: &CommissionSnapshot{OrderCost: float(10), SpecialCommission: float(1), GeneralCommission: float(0), UpgradeAddonCommission: float(0)},
+		ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed",
+		BookingInfo: OrderBookingInfo{Date: "2026-07-31"},
+		Snapshot:    &CommissionSnapshot{OrderCost: float(10), SpecialCommission: float(1), GeneralCommission: float(0), UpgradeAddonCommission: float(0)},
 	}
-	order.BookingInfo.Date = "2026-07-31"
 	b := &rebuildBackend{
 		job:    RebuildJob{ID: primitive.NewObjectID(), OfficeID: primitive.NewObjectID(), Scope: "commissions", StartDate: "2026-07-01", EndDate: "2026-07-31"},
 		orders: []OrderSource{order},
@@ -385,7 +384,7 @@ func TestProcessorOrderValidationAndBackendErrors(t *testing.T) {
 		{"targets error", func(b *rebuildBackend) { b.targetsErr = boom }},
 		{"put error", func(b *rebuildBackend) {
 			b.putErr = boom
-			b.orders = []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: primitive.NewObjectID(), Status: "completed", ServiceDate: "2026-07-01", Snapshot: &CommissionSnapshot{OrderCost: float(1), SpecialCommission: float(1)}}}
+			b.orders = []OrderSource{{ID: primitive.NewObjectID(), BeauticianID: primitive.NewObjectID(), Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-01"}, Snapshot: &CommissionSnapshot{OrderCost: float(1), SpecialCommission: float(1)}}}
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -400,9 +399,9 @@ func TestProcessorOrderValidationAndBackendErrors(t *testing.T) {
 
 	worker := primitive.NewObjectID()
 	b := &rebuildBackend{job: base, orders: []OrderSource{
-		{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "bad", Snapshot: &CommissionSnapshot{}},
-		{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-02"},
-		{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", ServiceDate: "2026-07-03", Snapshot: &CommissionSnapshot{OrderCost: float(math.NaN()), SpecialCommission: float(math.Inf(1)), GeneralCommission: float(2), UpgradeAddonCommission: float(0)}},
+		{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "bad"}, Snapshot: &CommissionSnapshot{}},
+		{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-02"}},
+		{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-03"}, Snapshot: &CommissionSnapshot{OrderCost: float(math.NaN()), SpecialCommission: float(math.Inf(1)), GeneralCommission: float(2), UpgradeAddonCommission: float(0)}},
 	}}
 	if _, err := NewProcessor(b).ProcessNext(context.Background()); err != nil || b.finishStatus != "completed_with_issues" || len(b.entries) != 0 || b.stats.MissingSnapshots < 3 {
 		t.Fatalf("err=%v status=%s entries=%d stats=%+v", err, b.finishStatus, len(b.entries), b.stats)

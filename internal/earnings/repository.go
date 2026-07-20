@@ -54,14 +54,21 @@ func (r *Repository) ClaimNextRebuild(ctx context.Context) (RebuildJob, error) {
 
 func (r *Repository) LoadOrderSources(ctx context.Context, officeID primitive.ObjectID, startDate, endDate string) ([]OrderSource, error) {
 	dateRange := bson.M{"$gte": startDate, "$lte": endDate}
-	filter := bson.M{"office_id": officeID, "is_deleted": bson.M{"$ne": true}, "status": "completed", "$or": bson.A{
-		bson.M{"booking_info.date": dateRange},
-		bson.M{"$and": bson.A{
-			bson.M{"booking_info.date": bson.M{"$in": bson.A{"", nil}}},
-			bson.M{"service_date": dateRange},
-		}},
-	}}
-	cur, err := r.db.Collection("orders").Find(ctx, filter)
+	filter := bson.M{
+		"office_id":         officeID,
+		"is_deleted":        bson.M{"$ne": true},
+		"status":            "completed",
+		"booking_info.date": dateRange,
+	}
+	projection := bson.M{
+		"_id":                 1,
+		"office_id":           1,
+		"beautician_id":       1,
+		"status":              1,
+		"booking_info.date":   1,
+		"commission_snapshot": 1,
+	}
+	cur, err := r.db.Collection("orders").Find(ctx, filter, options.Find().SetProjection(projection))
 	if err != nil {
 		return nil, err
 	}

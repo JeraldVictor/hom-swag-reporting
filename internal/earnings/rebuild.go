@@ -25,16 +25,17 @@ type CommissionSnapshot struct {
 	IsPaid                 bool     `bson:"is_paid"`
 }
 
+type OrderBookingInfo struct {
+	Date string `bson:"date"`
+}
+
 type OrderSource struct {
-	ID           primitive.ObjectID `bson:"_id"`
-	OfficeID     primitive.ObjectID `bson:"office_id"`
-	BeauticianID primitive.ObjectID `bson:"beautician_id"`
-	Status       string             `bson:"status"`
-	BookingInfo  struct {
-		Date string `bson:"date"`
-	} `bson:"booking_info"`
-	ServiceDate string              `bson:"service_date"`
-	Snapshot    *CommissionSnapshot `bson:"commission_snapshot"`
+	ID           primitive.ObjectID  `bson:"_id"`
+	OfficeID     primitive.ObjectID  `bson:"office_id"`
+	BeauticianID primitive.ObjectID  `bson:"beautician_id"`
+	Status       string              `bson:"status"`
+	BookingInfo  OrderBookingInfo    `bson:"booking_info"`
+	Snapshot     *CommissionSnapshot `bson:"commission_snapshot"`
 }
 
 type PayableSnapshot struct {
@@ -576,10 +577,7 @@ func workerMonthKey(worker primitive.ObjectID, date string) string {
 }
 
 func orderDate(order OrderSource) string {
-	if order.BookingInfo.Date != "" {
-		return order.BookingInfo.Date
-	}
-	return order.ServiceDate
+	return order.BookingInfo.Date
 }
 
 func validSourceDate(value string) bool {
