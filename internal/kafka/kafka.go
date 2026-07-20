@@ -38,6 +38,16 @@ func (c *Consumer) ReadMessage(ctx context.Context) (kafka.Message, error) {
 	return c.Reader.ReadMessage(ctx)
 }
 
+// FetchMessage and CommitMessages allow consumers whose side effect must be
+// durable before acknowledging Kafka to manage offsets explicitly.
+func (c *Consumer) FetchMessage(ctx context.Context) (kafka.Message, error) {
+	return c.Reader.FetchMessage(ctx)
+}
+
+func (c *Consumer) CommitMessages(ctx context.Context, messages ...kafka.Message) error {
+	return c.Reader.CommitMessages(ctx, messages...)
+}
+
 func (c *Consumer) StartMessageSpan(ctx context.Context, msg kafka.Message) (context.Context, trace.Span) {
 	parentCtx := otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(headersToMap(msg.Headers)))
 	spanCtx, span := otel.Tracer("homswag-reporting-kafka").Start(

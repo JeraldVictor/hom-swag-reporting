@@ -77,6 +77,8 @@ var beauticianCommissionColumns = []reports.Column{
 	{Key: "leaderboard_rank", Label: "Leaderboard Rank", Type: "string", SourcePath: "leaderboard_rank", FormulaID: "beautician.leaderboard_rank", DefaultVisible: true},
 	{Key: "leaderboard_bonus", Label: "Leaderboard Bonus", Type: "currency", SourcePath: "leaderboard_bonus", FormulaID: "beautician.leaderboard_bonus", ContributesToTotal: true, DefaultVisible: true},
 	{Key: "total_commission", Label: "Total Commission", Type: "currency", SourcePath: "total_commission", FormulaID: "beautician.total_commission", ContributesToTotal: true, DefaultVisible: true},
+	{Key: "estimated_target1_commission", Label: "Estimated Commission at Target 1", Type: "currency", SourcePath: "estimated_target1_commission", FormulaID: "beautician.estimated_target1_commission", DefaultVisible: false},
+	{Key: "estimated_target2_commission", Label: "Estimated Commission at Target 2", Type: "currency", SourcePath: "estimated_target2_commission", FormulaID: "beautician.estimated_target2_commission", DefaultVisible: false},
 }
 
 var staffSummaryColumns = []reports.Column{
@@ -105,6 +107,8 @@ var columnDescriptions = map[string]string{
 	"convenience_fees":                "Convenience fee charged to the customer for this order.",
 	"coupon_discount":                 "Discount from coupons or offers after removing membership and special discounts from the total discount.",
 	"emp_code":                        "Employee code from the staff profile.",
+	"estimated_target1_commission":    "Projected total commission if Target 1 is achieved, calculated by the reporting service.",
+	"estimated_target2_commission":    "Projected total commission if Target 2 is achieved, calculated by the reporting service.",
 	"hygiene_fees":                    "Hygiene fee charged to the customer for this order.",
 	"leaderboard_bonus":               "Bonus added for the staff member's leaderboard position for the selected period.",
 	"leaderboard_rank":                "Rank assigned to the staff member for the selected report period.",

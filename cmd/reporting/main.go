@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/config"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/earnings"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/jobs"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/kafka"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/minio"
@@ -70,7 +71,7 @@ func withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Office-ID")
 			w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition")
 		}
 		if r.Method == http.MethodOptions {
@@ -89,6 +90,10 @@ func withOptionalBearerAuth(next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/earnings/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -278,7 +283,7 @@ func exportReport(ctx context.Context, executor reports.Executor, req reports.Re
 			return nil, "", "", err
 		}
 	case "XLSX":
-		if err := xlsxWriter.WriteTo(&out); err != nil {
+		if err := xlsxWriter.Write(&out); err != nil {
 			return nil, "", "", err
 		}
 	case "PDF":
@@ -335,6 +340,8 @@ func main() {
 	brokers := kafka.ParseBrokers(cfg.KafkaBrokers)
 	consumer := kafka.NewConsumer(brokers, cfg.RequestTopic, cfg.ConsumerGroup)
 	defer consumer.Close()
+	earningsSourceConsumer := kafka.NewConsumer(brokers, cfg.EarningsSourceTopic, cfg.EarningsSourceConsumerGroup)
+	defer earningsSourceConsumer.Close()
 
 	eventProducer := kafka.NewProducer(brokers, cfg.EventTopic)
 	defer eventProducer.Close()
@@ -346,7 +353,7 @@ func main() {
 	registry := reports.NewRegistry()
 	registry.Register(static.NewRiderCommissionExecutor(mongoClient.Database))
 	registry.Register(static.NewBeauticianCommissionExecutor(mongoClient.Database))
-	registry.Register(static.NewPetrolWeeklyExecutor(mongoClient.Database))
+	registry.Register(static.NewPetrolWeeklyExecutorWithMode(mongoClient.Database, cfg.EarningsMode))
 	registry.Register(static.NewDailySalesExecutor(mongoClient.Database))
 	registry.Register(static.NewStaffSummaryExecutor(mongoClient.Database))
 	registry.Register(static.NewCODPendingExecutor(mongoClient.Database))
@@ -360,6 +367,44 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+
+	earningsRepository := earnings.NewRepository(mongoClient.Database)
+	indexCtx, cancelIndexes := context.WithTimeout(ctx, 10*time.Second)
+	if err := earningsRepository.EnsureIndexes(indexCtx); err != nil {
+		cancelIndexes()
+		log.Fatalf("Failed to ensure earnings indexes: %v", err)
+	}
+	cancelIndexes()
+	earningsAPI := earnings.NewAPI(earningsRepository, cfg.JWTSecret, cfg.EarningsMode)
+	mux.Handle("/api/earnings/", earningsAPI.Handler())
+
+	// Source notifications contain identifiers and dates only. The worker
+	// queues an idempotent rebuild which reloads persisted monetary snapshots
+	// from Mongo before anything is written to the ledger.
+	earningsSourceWorker := earnings.NewSourceEventWorker(earningsSourceConsumer, deadLetterProducer, earningsRepository)
+	go earningsSourceWorker.Start(ctx)
+
+	// Rebuild requests are persisted by the admin API and processed by the
+	// reporting service itself. ClaimNextRebuild uses an atomic Mongo update,
+	// so multiple service instances can safely poll the queue.
+	earningsProcessor := earnings.NewProcessor(earningsRepository)
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				processed, processErr := earningsProcessor.ProcessNext(ctx)
+				if processErr != nil {
+					log.Printf("earnings rebuild failed: %v", processErr)
+				} else if processed {
+					log.Printf("earnings rebuild completed")
+				}
+			}
+		}
+	}()
 
 	mux.HandleFunc("/definitions", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

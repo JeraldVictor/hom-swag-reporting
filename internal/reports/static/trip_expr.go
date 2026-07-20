@@ -1,6 +1,7 @@
 package static
 
 import (
+	"github.com/JeraldVictor/hom-swag-reporting/internal/payables"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -10,40 +11,23 @@ func payableTripKanbanStates() bson.A {
 }
 
 func payableTripStatusMatch() bson.M {
-	return bson.M{"$or": bson.A{
-		bson.M{"kanban_state": bson.M{"$in": payableTripKanbanStates()}},
-		bson.M{"status": "completed"},
-	}}
+	return payables.TripStatusMatch()
 }
 
 func payableTripBaseMatch(startDateKey string, endDateKey string) bson.M {
-	return bson.M{
-		"date": bson.M{
-			"$gte": startDateKey,
-			"$lte": endDateKey,
-		},
-		"is_deleted": bson.M{"$ne": true},
-		"$and":       bson.A{payableTripStatusMatch()},
-	}
+	return payables.TripBaseMatch(startDateKey, endDateKey)
+}
+
+func tripAllowanceWorkerIDExpr() bson.M {
+	return payables.AllowanceWorkerIDExpr()
+}
+
+func tripSnapshotOrLegacyExpr(field string, legacy any) bson.M {
+	return payables.SnapshotOrLegacyExpr(field, legacy)
 }
 
 func tripPayableDistanceExpr() bson.M {
-	baseDistance := bson.M{"$ifNull": bson.A{"$auto_distance_km", 0}}
-	tripDistance := bson.M{"$ifNull": bson.A{"$fare_calculation.trip_distance_km", 0}}
-	extraDistance := bson.M{"$ifNull": bson.A{"$extra_km", 0}}
-
-	return bson.M{"$cond": bson.A{
-		bson.M{"$gt": bson.A{tripDistance, 0}},
-		tripDistance,
-		bson.M{"$add": bson.A{
-			bson.M{"$cond": bson.A{
-				"$is_two_way",
-				bson.M{"$multiply": bson.A{baseDistance, 2}},
-				baseDistance,
-			}},
-			extraDistance,
-		}},
-	}}
+	return payables.PayableDistanceExpr()
 }
 
 func tripPetrolPayableExpr(distanceExpr any) bson.M {

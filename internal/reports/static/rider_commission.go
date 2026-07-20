@@ -3,9 +3,9 @@ package static
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
+	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -54,6 +54,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
 		match["$and"] = append(match["$and"].(bson.A), bson.M{"$or": bson.A{
 			bson.M{"rider_id": staffID},
+			bson.M{"driver_beautician_id": staffID},
 			bson.M{"beautician_id": staffID, "is_self_drive": true},
 		}})
 	}
@@ -69,49 +70,31 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 
 	legacyPayableDistanceExpr := tripPayableDistanceExpr()
-	payableDistanceExpr := bson.M{"$cond": bson.A{
-		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.payable_distance_km", 0}}, 0}},
-		"$payable_snapshot.payable_distance_km",
-		legacyPayableDistanceExpr,
-	}}
+	payableDistanceExpr := tripSnapshotOrLegacyExpr("payable_distance_km", legacyPayableDistanceExpr)
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
 	}
 	pipeline = append(pipeline, tripOfficeLookupStages()...)
 	pipeline = append(pipeline,
 		bson.D{{Key: "$addFields", Value: bson.M{
-			"allowance_worker_id": bson.M{"$cond": bson.A{
-				bson.M{"$and": bson.A{
-					"$is_self_drive",
-					bson.M{"$ne": bson.A{"$beautician_id", nil}},
-				}},
-				"$beautician_id",
-				"$rider_id",
-			}},
+			"allowance_worker_id": tripAllowanceWorkerIDExpr(),
 			"payable_distance_km": payableDistanceExpr,
-			"petrol_payable": bson.M{"$cond": bson.A{
-				bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.petrol_payable", 0}}, 0}},
-				"$payable_snapshot.petrol_payable",
-				tripPetrolPayableExpr(payableDistanceExpr),
-			}},
+			"petrol_payable":      tripSnapshotOrLegacyExpr("petrol_payable", tripPetrolPayableExpr(payableDistanceExpr)),
 		}}},
 		bson.D{{Key: "$addFields", Value: bson.M{
-			"commission_payable": bson.M{"$cond": bson.A{
-				bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.commission_payable", 0}}, 0}},
-				"$payable_snapshot.commission_payable",
-				bson.M{
-					"$cond": bson.A{
-						"$is_commission_applicable",
-						bson.M{
-							"$ifNull": bson.A{
-								"$commission_amount",
-								"$payable_distance_km",
-							},
+			"commission_payable": tripSnapshotOrLegacyExpr("commission_payable", bson.M{
+				"$cond": bson.A{
+					"$is_commission_applicable",
+					bson.M{
+						"$ifNull": bson.A{
+							"$commission_amount",
+							"$payable_distance_km",
 						},
-						0,
 					},
+					0,
 				},
-			}},
+			},
+			),
 		}}},
 		bson.D{{Key: "$group", Value: bson.M{
 			"_id":                "$allowance_worker_id",
@@ -234,28 +217,17 @@ func (e *RiderCommissionExecutor) getLeaderboardBonusByRider(
 		return bonusByRider, nil
 	}
 
-	rankedRows := append([]riderCommissionRow(nil), rows...)
-	sort.Slice(rankedRows, func(i, j int) bool {
-		if rankedRows[i].TripCount == rankedRows[j].TripCount {
-			return rankedRows[i].TotalDistanceKM > rankedRows[j].TotalDistanceKM
-		}
-		return rankedRows[i].TripCount > rankedRows[j].TripCount
-	})
-
 	prizes, err := e.getRiderLeaderboardPrizes(ctx, officeID)
 	if err != nil {
 		return nil, err
 	}
 
-	for index, row := range rankedRows {
-		bonus := 0.0
-		if index < len(prizes) {
-			bonus = prizes[index]
-		}
-		bonusByRider[row.ID] = riderLeaderboardBonus{
-			Rank:  index + 1,
-			Bonus: bonus,
-		}
+	scores := make([]leaderboard.RiderScore, len(rows))
+	for index, row := range rows {
+		scores[index] = leaderboard.RiderScore{WorkerID: row.ID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM}
+	}
+	for _, award := range leaderboard.RankRiders(scores, prizes) {
+		bonusByRider[award.WorkerID] = riderLeaderboardBonus{Rank: award.Rank, Bonus: award.Bonus}
 	}
 	return bonusByRider, nil
 }

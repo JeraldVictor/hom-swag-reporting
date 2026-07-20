@@ -319,29 +319,17 @@ func TestGoldenTripSnapshotWinsOverLegacyPayableInputs(t *testing.T) {
 		"is_commission_applicable": true,
 		"commission_amount":        70,
 	}
-	distanceExpr := bson.M{"$cond": bson.A{
-		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.payable_distance_km", 0}}, 0}},
-		"$payable_snapshot.payable_distance_km",
-		tripPayableDistanceExpr(),
-	}}
-	commissionExpr := bson.M{"$cond": bson.A{
-		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.commission_payable", 0}}, 0}},
-		"$payable_snapshot.commission_payable",
-		bson.M{
-			"$cond": bson.A{
-				"$is_commission_applicable",
-				bson.M{"$ifNull": bson.A{"$commission_amount", "$payable_distance_km"}},
-				0,
-			},
+	distanceExpr := tripSnapshotOrLegacyExpr("payable_distance_km", tripPayableDistanceExpr())
+	commissionExpr := tripSnapshotOrLegacyExpr("commission_payable", bson.M{
+		"$cond": bson.A{
+			"$is_commission_applicable",
+			bson.M{"$ifNull": bson.A{"$commission_amount", "$payable_distance_km"}},
+			0,
 		},
-	}}
+	})
 
 	assertEvaluatedMoney(t, "snapshot distance", distanceExpr, document, 11)
-	assertEvaluatedMoney(t, "snapshot petrol", bson.M{"$cond": bson.A{
-		bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$payable_snapshot.petrol_payable", 0}}, 0}},
-		"$payable_snapshot.petrol_payable",
-		tripPetrolPayableExpr(distanceExpr),
-	}}, document, 44)
+	assertEvaluatedMoney(t, "snapshot petrol", tripSnapshotOrLegacyExpr("petrol_payable", tripPetrolPayableExpr(distanceExpr)), document, 44)
 	assertEvaluatedMoney(t, "snapshot commission", commissionExpr, document, 33)
 }
 

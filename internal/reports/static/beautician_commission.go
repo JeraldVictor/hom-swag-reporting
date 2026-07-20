@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
+	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -53,7 +53,9 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	endDateKey := endDate.Format("2006-01-02")
 	match := orderBookingDateOnlyMatch(startDateKey, endDateKey)
 	match["status"] = bson.M{"$in": bson.A{"completed", "cancelled_and_refunded"}}
+	var reportStaffID primitive.ObjectID
 	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
+		reportStaffID = staffID
 		match["beautician_id"] = staffID
 	}
 
@@ -143,6 +145,33 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	if err := cursor.Err(); err != nil {
 		return err
 	}
+	// A staff-filtered overview must still expose configured targets when the
+	// worker has no orders in the selected period. This avoids making clients
+	// recreate target defaults outside the reporting service.
+	if len(rows) == 0 && !reportStaffID.IsZero() {
+		profileFilter := bson.M{"_id": reportStaffID, "is_deleted": bson.M{"$ne": true}}
+		if !officeID.IsZero() {
+			profileFilter["office_id"] = officeID
+		}
+		var profile struct {
+			ID             primitive.ObjectID `bson:"_id"`
+			Name           string             `bson:"name"`
+			EmpCode        string             `bson:"emp_code"`
+			MonthlyTarget1 float64            `bson:"monthly_target1"`
+			MonthlyTarget2 float64            `bson:"monthly_target2"`
+		}
+		if err := e.db.Collection("beauticians").FindOne(ctx, profileFilter).Decode(&profile); err != nil {
+			if err != mongo.ErrNoDocuments {
+				return err
+			}
+		} else {
+			rows = append(rows, beauticianCommissionRow{
+				ID: profile.ID, Name: profile.Name, EmpCode: profile.EmpCode,
+				MonthlyTarget1: profile.MonthlyTarget1, MonthlyTarget2: profile.MonthlyTarget2,
+			})
+			beauticianIDs = append(beauticianIDs, profile.ID)
+		}
+	}
 
 	monthStart, monthEnd := commissionTargetMonthBounds(endDate)
 	monthlyRevenueByBeautician, err := e.getMonthlyRevenueByBeautician(ctx, beauticianIDs, officeID, monthStart, monthEnd)
@@ -179,6 +208,8 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		"Leaderboard Rank",
 		"Leaderboard Bonus",
 		"Total Commission",
+		"Estimated Commission at Target 1",
+		"Estimated Commission at Target 2",
 	})
 
 	for _, result := range rows {
@@ -201,6 +232,20 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 				payableTarget2Bonus +
 				leaderboard.Bonus,
 		)
+		estimatedTarget1Commission := math.Max(totalCommission, roundPayment(
+			result.TotalSpecialCommission+
+				result.TotalGeneralCommission+
+				result.TotalUpgradeAddonCommission+
+				payableTarget2Bonus+
+				leaderboard.Bonus,
+		))
+		estimatedTarget2Commission := math.Max(estimatedTarget1Commission, roundPayment(
+			result.TotalSpecialCommission+
+				result.TotalGeneralCommission+
+				result.TotalUpgradeAddonCommission+
+				target2Bonus+
+				leaderboard.Bonus,
+		))
 		sink.WriteRow([]interface{}{
 			result.ID.Hex(),
 			result.EmpCode,
@@ -221,6 +266,8 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			formatRank(leaderboard.Rank),
 			fmt.Sprintf("%.2f", leaderboard.Bonus),
 			fmt.Sprintf("%.2f", totalCommission),
+			fmt.Sprintf("%.2f", estimatedTarget1Commission),
+			fmt.Sprintf("%.2f", estimatedTarget2Commission),
 		})
 	}
 
@@ -344,26 +391,16 @@ func (e *BeauticianCommissionExecutor) getLeaderboardBonusByBeautician(
 		return nil, err
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Revenue == rows[j].Revenue {
-			return rows[i].OrderCount > rows[j].OrderCount
-		}
-		return rows[i].Revenue > rows[j].Revenue
-	})
-
 	prizes, err := e.getBeauticianLeaderboardPrizes(ctx, officeID)
 	if err != nil {
 		return nil, err
 	}
+	scores := make([]leaderboard.BeauticianScore, len(rows))
 	for index, row := range rows {
-		bonus := 0.0
-		if index < len(prizes) {
-			bonus = prizes[index]
-		}
-		bonusByBeautician[row.ID] = beauticianLeaderboardBonus{
-			Rank:  index + 1,
-			Bonus: bonus,
-		}
+		scores[index] = leaderboard.BeauticianScore{WorkerID: row.ID, Revenue: row.Revenue, OrderCount: row.OrderCount}
+	}
+	for _, award := range leaderboard.RankBeauticians(scores, prizes) {
+		bonusByBeautician[award.WorkerID] = beauticianLeaderboardBonus{Rank: award.Rank, Bonus: award.Bonus}
 	}
 	return bonusByBeautician, nil
 }

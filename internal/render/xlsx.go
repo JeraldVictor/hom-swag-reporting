@@ -7,9 +7,9 @@ import (
 )
 
 type XLSXWriter struct {
-	file     *excelize.File
-	sheet    string
-	currRow  int
+	file    *excelize.File
+	sheet   string
+	currRow int
 }
 
 func NewXLSXWriter() *XLSXWriter {
@@ -31,7 +31,7 @@ func (x *XLSXWriter) WriteRow(row []interface{}) error {
 	return nil
 }
 
-func (x *XLSXWriter) WriteTo(w io.Writer) error {
+func (x *XLSXWriter) Write(w io.Writer) error {
 	return x.file.Write(w)
 }
 

@@ -72,6 +72,77 @@ func TestTripPayableDistanceMatchesLegacyNodeFallback(t *testing.T) {
 	}
 }
 
+func TestTripAllowanceWorkerAttributionPriority(t *testing.T) {
+	expression := tripAllowanceWorkerIDExpr()
+	fixtures := []struct {
+		name     string
+		document map[string]any
+		expected string
+	}{
+		{
+			name: "explicit driver beautician wins",
+			document: map[string]any{
+				"driver_beautician_id": "driver-beautician",
+				"beautician_id":        "legacy-beautician",
+				"rider_id":             "rider",
+				"is_self_drive":        true,
+			},
+			expected: "driver-beautician",
+		},
+		{
+			name: "legacy self drive beautician is retained",
+			document: map[string]any{
+				"beautician_id": "legacy-beautician",
+				"rider_id":      "rider",
+				"is_self_drive": true,
+			},
+			expected: "legacy-beautician",
+		},
+		{
+			name: "ordinary trip belongs to rider",
+			document: map[string]any{
+				"beautician_id": "passenger-beautician",
+				"rider_id":      "rider",
+				"is_self_drive": false,
+			},
+			expected: "rider",
+		},
+	}
+
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			got := evalTestExpr(t, expression, fixture.document, nil)
+			if got != fixture.expected {
+				t.Fatalf("worker = %#v, want %q", got, fixture.expected)
+			}
+		})
+	}
+}
+
+func TestTripSnapshotZeroIsAuthoritative(t *testing.T) {
+	document := map[string]any{
+		"payable_snapshot": map[string]any{
+			"payable_distance_km": 0,
+			"petrol_payable":      0,
+			"commission_payable":  0,
+		},
+		"auto_distance_km":         10,
+		"commission_amount":        25,
+		"is_commission_applicable": true,
+	}
+
+	assertEvaluatedMoney(t, "zero snapshot distance", tripSnapshotOrLegacyExpr("payable_distance_km", tripPayableDistanceExpr()), document, 0)
+	assertEvaluatedMoney(t, "zero snapshot petrol", tripSnapshotOrLegacyExpr("petrol_payable", 50), document, 0)
+	assertEvaluatedMoney(t, "zero snapshot commission", tripSnapshotOrLegacyExpr("commission_payable", 25), document, 0)
+}
+
+func TestTripSnapshotFallsBackOnlyWhenMissingOrNull(t *testing.T) {
+	assertEvaluatedMoney(t, "missing snapshot", tripSnapshotOrLegacyExpr("petrol_payable", 50), map[string]any{}, 50)
+	assertEvaluatedMoney(t, "null snapshot", tripSnapshotOrLegacyExpr("petrol_payable", 50), map[string]any{
+		"payable_snapshot": map[string]any{"petrol_payable": nil},
+	}, 50)
+}
+
 func TestTripPetrolPayableFallsBackToOfficeFareFormula(t *testing.T) {
 	distanceExpr := tripPayableDistanceExpr()
 

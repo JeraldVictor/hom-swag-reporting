@@ -194,7 +194,7 @@ func (w *Worker) ProcessJob(ctx context.Context, req kafka.ReportRequest) {
 			return
 		}
 	} else if req.Format == "XLSX" {
-		if err := xlsxWriter.WriteTo(f); err != nil {
+		if err := xlsxWriter.Write(f); err != nil {
 			w.handleError(ctx, req.JobID, "XLSX_WRITE_ERROR", err.Error(), req.TraceID)
 			return
 		}

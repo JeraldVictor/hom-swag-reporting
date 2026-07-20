@@ -10,50 +10,58 @@ import (
 )
 
 type Config struct {
-	Port            string
-	TempDir         string
-	MongoDBURI      string
-	MongoDatabase   string
-	KafkaBrokers    string
-	RequestTopic    string
-	EventTopic      string
-	DeadLetterTopic string
-	ConsumerGroup   string
-	MinIOEndpoint   string
-	MinIOAccessKey  string
-	MinIOSecretKey  string
-	MinIOUseSSL     bool
-	MinIOBucket     string
-	MaxRows         int
-	JobTTLDays      int
-	SignedURLTTL    int
-	EnableOTEL      bool
-	OTELTracesURL   string
-	OTELServiceName string
+	Port                        string
+	TempDir                     string
+	MongoDBURI                  string
+	MongoDatabase               string
+	KafkaBrokers                string
+	RequestTopic                string
+	EventTopic                  string
+	DeadLetterTopic             string
+	ConsumerGroup               string
+	EarningsSourceTopic         string
+	EarningsSourceConsumerGroup string
+	MinIOEndpoint               string
+	MinIOAccessKey              string
+	MinIOSecretKey              string
+	MinIOUseSSL                 bool
+	MinIOBucket                 string
+	MaxRows                     int
+	JobTTLDays                  int
+	SignedURLTTL                int
+	EnableOTEL                  bool
+	OTELTracesURL               string
+	OTELServiceName             string
+	JWTSecret                   string
+	EarningsMode                string
 }
 
 func Load() *Config {
 	return &Config{
-		Port:            getEnv("PORT", "3003"),
-		TempDir:         getEnv("REPORTING_TEMP_DIR", "/tmp/reports"),
-		MongoDBURI:      getEnv("MONGODB_URI", "mongodb://admin:password@127.0.0.1:27017/homswag?authSource=admin"),
-		MongoDatabase:   getEnv("MONGO_DATABASE", "homswag"),
-		KafkaBrokers:    getEnv("KAFKA_BROKERS", "127.0.0.1:9094"),
-		RequestTopic:    getEnv("REPORTING_REQUEST_TOPIC", "homswag.reporting.requests"),
-		EventTopic:      getEnv("REPORTING_EVENT_TOPIC", "homswag.reporting.events"),
-		DeadLetterTopic: getEnv("REPORTING_DEAD_LETTER_TOPIC", "homswag.reporting.dead-letter"),
-		ConsumerGroup:   getEnv("REPORTING_CONSUMER_GROUP", "homswag-reporting-workers"),
-		MinIOEndpoint:   getMinIOEndpoint(),
-		MinIOAccessKey:  getEnv("MINIO_ACCESS_KEY", "minioadmin"),
-		MinIOSecretKey:  getEnv("MINIO_SECRET_KEY", "minioadmin"),
-		MinIOUseSSL:     getEnvBool("MINIO_USE_SSL", false),
-		MinIOBucket:     getEnv("REPORTING_BUCKET", "reports"),
-		MaxRows:         getEnvInt("REPORTING_MAX_ROWS", 200000),
-		JobTTLDays:      getEnvInt("REPORTING_JOB_TTL_DAYS", 30),
-		SignedURLTTL:    getEnvInt("REPORTING_SIGNED_URL_TTL_SECONDS", 900),
-		EnableOTEL:      getEnvBool("ENABLE_OTEL", false),
-		OTELTracesURL:   getEnv("OTEL_TRACES_ENDPOINT", "http://127.0.0.1:4318/v1/traces"),
-		OTELServiceName: getEnv("OTEL_REPORTING_SERVICE_NAME", "reporting-service"),
+		Port:                        getEnv("PORT", "3003"),
+		TempDir:                     getEnv("REPORTING_TEMP_DIR", "/tmp/reports"),
+		MongoDBURI:                  getEnv("MONGODB_URI", "mongodb://admin:password@127.0.0.1:27017/homswag?authSource=admin"),
+		MongoDatabase:               getEnv("MONGO_DATABASE", "homswag"),
+		KafkaBrokers:                getEnv("KAFKA_BROKERS", "127.0.0.1:9094"),
+		RequestTopic:                getEnv("REPORTING_REQUEST_TOPIC", "homswag.reporting.requests"),
+		EventTopic:                  getEnv("REPORTING_EVENT_TOPIC", "homswag.reporting.events"),
+		DeadLetterTopic:             getEnv("REPORTING_DEAD_LETTER_TOPIC", "homswag.reporting.dead-letter"),
+		ConsumerGroup:               getEnv("REPORTING_CONSUMER_GROUP", "homswag-reporting-workers"),
+		EarningsSourceTopic:         getEnv("EARNINGS_SOURCE_TOPIC", "homswag.earnings.sources"),
+		EarningsSourceConsumerGroup: getEnv("EARNINGS_SOURCE_CONSUMER_GROUP", "homswag-reporting-earnings-sources"),
+		MinIOEndpoint:               getMinIOEndpoint(),
+		MinIOAccessKey:              getEnv("MINIO_ACCESS_KEY", "minioadmin"),
+		MinIOSecretKey:              getEnv("MINIO_SECRET_KEY", "minioadmin"),
+		MinIOUseSSL:                 getEnvBool("MINIO_USE_SSL", false),
+		MinIOBucket:                 getEnv("REPORTING_BUCKET", "reports"),
+		MaxRows:                     getEnvInt("REPORTING_MAX_ROWS", 200000),
+		JobTTLDays:                  getEnvInt("REPORTING_JOB_TTL_DAYS", 30),
+		SignedURLTTL:                getEnvInt("REPORTING_SIGNED_URL_TTL_SECONDS", 900),
+		EnableOTEL:                  getEnvBool("ENABLE_OTEL", false),
+		OTELTracesURL:               getEnv("OTEL_TRACES_ENDPOINT", "http://127.0.0.1:4318/v1/traces"),
+		OTELServiceName:             getEnv("OTEL_REPORTING_SERVICE_NAME", "reporting-service"),
+		JWTSecret:                   getEnv("JWT_SECRET", ""),
+		EarningsMode:                getEnv("EARNINGS_MODE", "shadow"),
 	}
 }
 
