@@ -131,3 +131,36 @@ func TestRiderCommissionAuthoritativeKeepsZeroMoneyTrips(t *testing.T) {
 		}
 	})
 }
+
+func TestRiderCommissionStaffFilterRanksAgainstWholeOffice(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	firstID := primitive.NewObjectID()
+	selectedID := primitive.NewObjectID()
+	officeID := primitive.NewObjectID()
+
+	mt.Run("selected rider retains office rank", func(mt *mtest.T) {
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".trips", mtest.FirstBatch,
+				bson.D{{Key: "_id", Value: firstID}, {Key: "name", Value: "First"}, {Key: "trip_count", Value: 10}, {Key: "total_distance_km", Value: 90.0}},
+				bson.D{{Key: "_id", Value: selectedID}, {Key: "name", Value: "Selected"}, {Key: "trip_count", Value: 5}, {Key: "total_distance_km", Value: 50.0}},
+			),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".offices", mtest.FirstBatch,
+				bson.D{{Key: "_id", Value: officeID}, {Key: "leaderboard_prizes", Value: bson.M{"rider": bson.A{100.0, 50.0}}}},
+			),
+		)
+		req := riderCommissionRequest()
+		req.Parameters["office_id"] = officeID.Hex()
+		req.Parameters["staff_id"] = selectedID.Hex()
+		req.Limit = 1
+		sink := &integrationSink{}
+		if err := NewRiderCommissionExecutorWithMode(mt.DB, "shadow").Run(context.Background(), req, sink); err != nil {
+			mt.Fatalf("run: %v", err)
+		}
+		if len(sink.rows) != 2 {
+			mt.Fatalf("rows = %#v", sink.rows)
+		}
+		if sink.rows[1][0] != selectedID.Hex() || sink.rows[1][7] != "#2" || sink.rows[1][8] != "50.00" {
+			mt.Fatalf("selected row = %#v", sink.rows[1])
+		}
+	})
+}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/config"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/earnings"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/fieldreports"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/fieldsettlements"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/jobs"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/kafka"
@@ -384,6 +385,7 @@ func main() {
 	mux.Handle("/api/earnings/", earningsAPI.Handler())
 	leaderboardAPI := leaderboard.NewAPI(leaderboard.NewService(leaderboard.NewMongoStore(mongoClient.Database)))
 	mux.Handle("/leaderboard", leaderboardAPI.Handler())
+	mux.Handle("/field-report-detail", fieldreports.NewAPI(earningsRepository).Handler())
 	mux.Handle("/field-settlements", fieldsettlements.NewAPI(earningsRepository).Handler())
 
 	// Source notifications contain identifiers and dates only. The worker

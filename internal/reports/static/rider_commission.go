@@ -66,13 +66,6 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	endDateKey := endDate.Format("2006-01-02")
 	match := payableTripBaseMatch(startDateKey, endDateKey)
 	staffID, hasStaffID := reportObjectID(req.Parameters, "staff_id")
-	if hasStaffID {
-		match["$and"] = append(match["$and"].(bson.A), bson.M{"$or": bson.A{
-			bson.M{"rider_id": staffID},
-			bson.M{"driver_beautician_id": staffID},
-			bson.M{"beautician_id": staffID, "is_self_drive": true},
-		}})
-	}
 
 	var officeID primitive.ObjectID
 	if officeIDStr, ok := req.Parameters["office_id"].(string); ok && officeIDStr != "" {
@@ -88,7 +81,19 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		return fmt.Errorf("resolve earnings mode: %w", err)
 	}
 	if mode == "authoritative" {
-		return e.runLedger(ctx, req, sink, startDateKey, endDateKey, officeID, !officeID.IsZero(), staffID, hasStaffID, match)
+		filteredMatch := bson.M{}
+		for key, value := range match {
+			filteredMatch[key] = value
+		}
+		if hasStaffID {
+			andConditions := append(bson.A{}, match["$and"].(bson.A)...)
+			filteredMatch["$and"] = append(andConditions, bson.M{"$or": bson.A{
+				bson.M{"rider_id": staffID},
+				bson.M{"driver_beautician_id": staffID},
+				bson.M{"beautician_id": staffID, "is_self_drive": true},
+			}})
+		}
+		return e.runLedger(ctx, req, sink, startDateKey, endDateKey, officeID, !officeID.IsZero(), staffID, hasStaffID, filteredMatch)
 	}
 
 	legacyPayableDistanceExpr := tripPayableDistanceExpr()
@@ -158,7 +163,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		}}},
 	)
 
-	if req.Limit > 0 {
+	if req.Limit > 0 && !hasStaffID {
 		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: req.Limit}})
 	}
 
@@ -189,6 +194,9 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	sink.WriteRow(riderCommissionHeader())
 
 	for _, result := range rows {
+		if hasStaffID && result.ID != staffID {
+			continue
+		}
 		leaderboard := leaderboardByRider[result.ID]
 		totalCommission := roundPayment(result.CommissionPayable + leaderboard.Bonus)
 		sink.WriteRow([]interface{}{

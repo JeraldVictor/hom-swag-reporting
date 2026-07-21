@@ -31,6 +31,7 @@ type ReportOrder struct {
 	OrderNumber             string                 `bson:"order_number" json:"order_number"`
 	ServiceDate             string                 `bson:"service_date" json:"service_date"`
 	BookingInfo             map[string]interface{} `bson:"booking_info,omitempty" json:"booking_info,omitempty"`
+	Customer                map[string]interface{} `bson:"customer,omitempty" json:"customer,omitempty"`
 	OrderCost               float64                `bson:"order_cost" json:"order_cost"`
 	Total                   float64                `bson:"total" json:"total"`
 	Subtotal                float64                `bson:"subtotal" json:"subtotal"`
@@ -43,15 +44,16 @@ type ReportOrder struct {
 }
 
 type ReportTrip struct {
-	ID                primitive.ObjectID     `bson:"_id" json:"_id"`
-	TripNumber        string                 `bson:"trip_number" json:"trip_number"`
-	ServiceDate       string                 `bson:"service_date" json:"service_date"`
-	IsTwoWay          bool                   `bson:"is_two_way" json:"is_two_way"`
-	PayableDistanceKM float64                `bson:"payable_distance_km" json:"payable_distance_km"`
-	CommissionPayable float64                `bson:"commission_payable" json:"commission_payable"`
-	PetrolPayable     float64                `bson:"petrol_payable" json:"petrol_payable"`
-	PayableSnapshot   map[string]interface{} `bson:"payable_snapshot,omitempty" json:"payable_snapshot,omitempty"`
-	FareCalculation   map[string]interface{} `bson:"fare_calculation,omitempty" json:"fare_calculation,omitempty"`
+	ID                     primitive.ObjectID     `bson:"_id" json:"_id"`
+	TripNumber             string                 `bson:"trip_number" json:"trip_number"`
+	ServiceDate            string                 `bson:"service_date" json:"service_date"`
+	IsTwoWay               bool                   `bson:"is_two_way" json:"is_two_way"`
+	IsCommissionApplicable bool                   `bson:"is_commission_applicable" json:"is_commission_applicable"`
+	PayableDistanceKM      float64                `bson:"payable_distance_km" json:"payable_distance_km"`
+	CommissionPayable      float64                `bson:"commission_payable" json:"commission_payable"`
+	PetrolPayable          float64                `bson:"petrol_payable" json:"petrol_payable"`
+	PayableSnapshot        map[string]interface{} `bson:"payable_snapshot,omitempty" json:"payable_snapshot,omitempty"`
+	FareCalculation        map[string]interface{} `bson:"fare_calculation,omitempty" json:"fare_calculation,omitempty"`
 }
 
 type ReportPayout struct {
@@ -167,7 +169,7 @@ func (r *Repository) loadReportTrips(ctx context.Context, officeID, workerID pri
 		{{Key: "$addFields", Value: bson.M{"allowance_worker_id": payables.AllowanceWorkerIDExpr()}}},
 		{{Key: "$match", Value: bson.M{"allowance_worker_id": workerID}}},
 		{{Key: "$project", Value: bson.M{
-			"_id": 1, "trip_number": 1, "service_date": "$date", "is_two_way": 1,
+			"_id": 1, "trip_number": 1, "service_date": "$date", "is_two_way": 1, "is_commission_applicable": 1,
 			"payable_distance_km": payables.PaidSnapshotOrCanonicalExpr("payable_distance_km", distance),
 			"commission_payable":  payables.PaidSnapshotOrCanonicalExpr("commission_payable", commission),
 			"petrol_payable":      payables.PaidSnapshotOrCanonicalExpr("petrol_payable", petrol),
@@ -192,7 +194,7 @@ func (r *Repository) loadReportOrders(ctx context.Context, officeID, workerID pr
 			"is_deleted": bson.M{"$ne": true}, "booking_info.date": bson.M{"$gte": startDate, "$lte": endDate},
 		}}},
 		{{Key: "$project", Value: bson.M{
-			"_id": 1, "order_number": 1, "service_date": "$booking_info.date", "booking_info": 1,
+			"_id": 1, "order_number": 1, "service_date": "$booking_info.date", "booking_info": 1, "customer": 1,
 			"order_cost": bson.M{"$ifNull": bson.A{"$commission_snapshot.order_cost", bson.M{"$ifNull": bson.A{"$subtotal", "$total"}}}},
 			"total":      bson.M{"$ifNull": bson.A{"$total", 0}}, "subtotal": bson.M{"$ifNull": bson.A{"$subtotal", 0}},
 			"discount_total":            bson.M{"$ifNull": bson.A{"$discount_total", 0}},
