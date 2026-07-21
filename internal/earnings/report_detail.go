@@ -66,6 +66,7 @@ type ReportPayout struct {
 	PaymentMethod   string             `json:"payment_method"`
 	ReferenceNumber string             `json:"reference_number"`
 	Remarks         string             `json:"remarks,omitempty"`
+	Editable        bool               `json:"editable"`
 }
 
 type ReportAdjustment struct {
@@ -242,7 +243,7 @@ func (r *Repository) loadReportPayouts(ctx context.Context, officeID, workerID p
 		rows = append(rows, ReportPayout{
 			ID: settlement.ID, PayoutDate: settlement.CreatedAt, PayoutType: settlement.Bucket,
 			PeriodStart: settlement.StartDate, PeriodEnd: settlement.EndDate, Amount: float64(settlement.AmountPaise) / 100,
-			PaymentMethod: settlement.PaymentMethod, ReferenceNumber: settlement.Reference, Remarks: settlement.Remarks,
+			PaymentMethod: settlement.PaymentMethod, ReferenceNumber: settlement.Reference, Remarks: settlement.Remarks, Editable: true,
 		})
 	}
 	start, end, err := reportDateBounds(startDate, endDate)
@@ -281,6 +282,7 @@ func (r *Repository) loadReportPayouts(ctx context.Context, officeID, workerID p
 			PeriodStart: payout.PeriodStart.Format("2006-01-02"), PeriodEnd: payout.PeriodEnd.Format("2006-01-02"),
 			Amount: payout.Amount, PaymentMethod: payout.PaymentMethod,
 			ReferenceNumber: payout.ReferenceNumber, Remarks: payout.Remarks,
+			Editable: false,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].PayoutDate.After(rows[j].PayoutDate) })

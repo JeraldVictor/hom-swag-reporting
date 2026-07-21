@@ -24,6 +24,7 @@ const (
 var (
 	ErrSettlementExceedsPending = errors.New("settlement amount exceeds the worker's pending earnings for this range")
 	ErrNoPendingEarnings        = errors.New("no pending earnings exist for this worker, bucket, and range")
+	ErrSettlementNotFound       = errors.New("settlement not found")
 )
 
 type Repository struct {
@@ -622,6 +623,7 @@ func (r *Repository) AllocateSettlement(ctx context.Context, settlement Settleme
 		}
 		settlement.ID = primitive.NewObjectID()
 		settlement.CreatedAt = time.Now().UTC()
+		settlement.UpdatedAt = settlement.CreatedAt
 		settlement.Allocations = allocations
 		if _, err := r.db.Collection(settlementCollection).InsertOne(tx, settlement); err != nil {
 			return nil, err
@@ -641,6 +643,173 @@ func (r *Repository) FindSettlement(ctx context.Context, officeID primitive.Obje
 		return Settlement{}, false, nil
 	}
 	return settlement, err == nil, err
+}
+
+func (r *Repository) FindSettlementByID(ctx context.Context, officeID, settlementID primitive.ObjectID) (Settlement, bool, error) {
+	var settlement Settlement
+	err := r.db.Collection(settlementCollection).FindOne(ctx, bson.M{
+		"_id": settlementID, "office_id": officeID,
+	}).Decode(&settlement)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return Settlement{}, false, nil
+	}
+	return settlement, err == nil, err
+}
+
+func settlementEntryStatus(amount, settled int64) EntryStatus {
+	if settled == amount {
+		return StatusSettled
+	}
+	if settled == 0 {
+		return StatusOpen
+	}
+	return StatusPartiallySettled
+}
+
+// UpdateSettlement reverses the original allocations and applies the edited
+// amount again in one transaction. This keeps the ledger totals and entry
+// statuses consistent when an admin corrects a payout.
+func (r *Repository) UpdateSettlement(ctx context.Context, officeID, settlementID primitive.ObjectID, update SettlementUpdate) (Settlement, error) {
+	var stored Settlement
+	session, err := r.startSession()
+	if err != nil {
+		return stored, err
+	}
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(tx mongo.SessionContext) (interface{}, error) {
+		if err := r.db.Collection(settlementCollection).FindOne(tx, bson.M{
+			"_id": settlementID, "office_id": officeID,
+		}).Decode(&stored); err != nil {
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				return nil, ErrSettlementNotFound
+			}
+			return nil, err
+		}
+
+		now := time.Now().UTC()
+		revision := SettlementRevision{
+			AmountPaise: stored.AmountPaise, PaymentMethod: stored.PaymentMethod,
+			Reference: stored.Reference, Remarks: stored.Remarks,
+			Allocations: stored.Allocations, EditedBy: update.UpdatedBy, EditedAt: now,
+		}
+		if update.AmountPaise != stored.AmountPaise {
+			allocationIDs := make(bson.A, 0, len(stored.Allocations))
+			for _, allocation := range stored.Allocations {
+				allocationIDs = append(allocationIDs, allocation.EntryID)
+			}
+			allocatedEntries := make(map[primitive.ObjectID]LedgerEntry, len(stored.Allocations))
+			if len(allocationIDs) > 0 {
+				cursor, findErr := r.db.Collection(ledgerCollection).Find(tx, bson.M{
+					"_id": bson.M{"$in": allocationIDs}, "office_id": officeID,
+				})
+				if findErr != nil {
+					return nil, findErr
+				}
+				var entries []LedgerEntry
+				if findErr = cursor.All(tx, &entries); findErr != nil {
+					_ = cursor.Close(tx)
+					return nil, findErr
+				}
+				_ = cursor.Close(tx)
+				for _, entry := range entries {
+					allocatedEntries[entry.ID] = entry
+				}
+			}
+
+			for _, allocation := range stored.Allocations {
+				entry, found := allocatedEntries[allocation.EntryID]
+				if !found {
+					return nil, errors.New("settlement allocation references a missing ledger entry")
+				}
+				settled := entry.SettledAmountPaise - allocation.AmountPaise
+				result, updateErr := r.db.Collection(ledgerCollection).UpdateOne(tx, bson.M{
+					"_id": entry.ID, "office_id": officeID,
+					"settled_amount_paise": entry.SettledAmountPaise,
+					"status":               bson.M{"$ne": StatusVoid},
+				}, bson.M{"$set": bson.M{
+					"settled_amount_paise": settled,
+					"status":               settlementEntryStatus(entry.AmountPaise, settled),
+					"updated_at":           now,
+				}})
+				if updateErr != nil {
+					return nil, updateErr
+				}
+				if result.ModifiedCount != 1 {
+					return nil, errors.New("ledger changed while reversing the payout; retry the edit")
+				}
+			}
+
+			filter := bson.M{
+				"office_id": officeID, "worker_id": stored.WorkerID,
+				"worker_type": stored.WorkerType, "settlement_bucket": stored.Bucket,
+				"service_date_key": bson.M{"$gte": stored.StartDate, "$lte": stored.EndDate},
+				"status":           bson.M{"$in": bson.A{StatusOpen, StatusPartiallySettled}},
+			}
+			cursor, findErr := r.db.Collection(ledgerCollection).Find(tx, filter, options.Find().SetSort(
+				bson.D{{Key: "amount_paise", Value: 1}, {Key: "service_date_key", Value: 1}, {Key: "created_at", Value: 1}},
+			))
+			if findErr != nil {
+				return nil, findErr
+			}
+			var entries []LedgerEntry
+			if findErr = cursor.All(tx, &entries); findErr != nil {
+				_ = cursor.Close(tx)
+				return nil, findErr
+			}
+			_ = cursor.Close(tx)
+			allocations, allocationErr := buildAllocations(entries, update.AmountPaise)
+			if allocationErr != nil {
+				return nil, allocationErr
+			}
+			entryByID := make(map[primitive.ObjectID]LedgerEntry, len(entries))
+			for _, entry := range entries {
+				entryByID[entry.ID] = entry
+			}
+			for _, allocation := range allocations {
+				entry := entryByID[allocation.EntryID]
+				settled := entry.SettledAmountPaise + allocation.AmountPaise
+				result, updateErr := r.db.Collection(ledgerCollection).UpdateOne(tx, bson.M{
+					"_id": entry.ID, "office_id": officeID,
+					"settled_amount_paise": entry.SettledAmountPaise,
+					"status":               bson.M{"$in": bson.A{StatusOpen, StatusPartiallySettled}},
+				}, bson.M{"$set": bson.M{
+					"settled_amount_paise": settled,
+					"status":               settlementEntryStatus(entry.AmountPaise, settled),
+					"updated_at":           now,
+				}})
+				if updateErr != nil {
+					return nil, updateErr
+				}
+				if result.ModifiedCount != 1 {
+					return nil, errors.New("ledger changed during payout reallocation; retry the edit")
+				}
+			}
+			stored.Allocations = allocations
+		}
+
+		stored.AmountPaise, stored.PaymentMethod = update.AmountPaise, update.PaymentMethod
+		stored.Reference, stored.Remarks = update.Reference, update.Remarks
+		stored.UpdatedBy, stored.UpdatedAt = update.UpdatedBy, now
+		stored.RevisionHistory = append(stored.RevisionHistory, revision)
+		result, updateErr := r.db.Collection(settlementCollection).UpdateOne(tx, bson.M{
+			"_id": settlementID, "office_id": officeID,
+		}, bson.M{
+			"$set": bson.M{
+				"amount_paise": stored.AmountPaise, "payment_method": stored.PaymentMethod,
+				"reference": stored.Reference, "remarks": stored.Remarks,
+				"allocations": stored.Allocations, "updated_by": stored.UpdatedBy, "updated_at": stored.UpdatedAt,
+			},
+			"$push": bson.M{"revision_history": revision},
+		})
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		if result.MatchedCount != 1 {
+			return nil, ErrSettlementNotFound
+		}
+		return nil, nil
+	})
+	return stored, err
 }
 
 func (r *Repository) ListSettlements(ctx context.Context, input SettlementFilter) ([]Settlement, int64, error) {

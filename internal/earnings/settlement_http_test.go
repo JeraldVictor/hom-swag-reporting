@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func settlementBody(overrides ...string) string {
@@ -99,6 +101,50 @@ func TestListSettlements(t *testing.T) {
 			}
 			if test.name == "success" && (store.lastSettlementFilter.Page != 2 || store.lastSettlementFilter.Bucket != "petrol") {
 				t.Fatalf("filter=%#v", store.lastSettlementFilter)
+			}
+		})
+	}
+}
+
+func TestUpdateSettlement(t *testing.T) {
+	settlementID := primitive.NewObjectID()
+	existing := Settlement{
+		ID: settlementID, OfficeID: mustObjectID(testOfficeID), WorkerID: mustObjectID(testWorkerID),
+		WorkerType: "beautician", Bucket: BucketCommission, StartDate: "2026-07-01", EndDate: "2026-07-31",
+		AmountPaise: 1234,
+	}
+	validBody := `{"amount_paise":1500,"payment_method":"upi","reference":" corrected ","remarks":" corrected payout "}`
+	tests := []struct {
+		name string
+		id   string
+		body string
+		set  func(*mockStore)
+		want int
+	}{
+		{name: "invalid id", id: "bad", body: validBody, want: http.StatusBadRequest},
+		{name: "invalid body", id: settlementID.Hex(), body: `{`, want: http.StatusBadRequest},
+		{name: "invalid amount", id: settlementID.Hex(), body: `{"amount_paise":0,"payment_method":"cash","reference":"","remarks":""}`, want: http.StatusBadRequest},
+		{name: "missing", id: settlementID.Hex(), body: validBody, want: http.StatusNotFound},
+		{name: "closed period", id: settlementID.Hex(), body: validBody, set: func(s *mockStore) {
+			s.existingSettlement, s.existingSettlementFound, s.closedOverlap = existing, true, true
+		}, want: http.StatusConflict},
+		{name: "active rebuild", id: settlementID.Hex(), body: validBody, set: func(s *mockStore) {
+			s.existingSettlement, s.existingSettlementFound, s.activeRebuild = existing, true, true
+		}, want: http.StatusConflict},
+		{name: "success", id: settlementID.Hex(), body: validBody, set: func(s *mockStore) { s.existingSettlement, s.existingSettlementFound = existing, true }, want: http.StatusOK},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMockStore()
+			if test.set != nil {
+				test.set(store)
+			}
+			response := performAPIRequest(t, store, http.MethodPatch, "/api/earnings/settlements/"+test.id+"?office_id="+testOfficeID, test.body, validTestClaims())
+			if response.Code != test.want {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if test.name == "success" && (store.lastSettlement.AmountPaise != 1500 || store.lastSettlement.Reference != "corrected") {
+				t.Fatalf("update was not normalized: %#v", store.lastSettlement)
 			}
 		})
 	}

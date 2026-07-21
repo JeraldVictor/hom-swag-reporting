@@ -40,6 +40,8 @@ type Store interface {
 	ListRebuilds(context.Context, RebuildFilter) ([]RebuildJob, int64, error)
 	AllocateSettlement(context.Context, Settlement) (Settlement, bool, error)
 	FindSettlement(context.Context, primitive.ObjectID, string) (Settlement, bool, error)
+	FindSettlementByID(context.Context, primitive.ObjectID, primitive.ObjectID) (Settlement, bool, error)
+	UpdateSettlement(context.Context, primitive.ObjectID, primitive.ObjectID, SettlementUpdate) (Settlement, error)
 	ListSettlements(context.Context, SettlementFilter) ([]Settlement, int64, error)
 	GetModeState(context.Context, primitive.ObjectID) (ModeState, error)
 	SetMode(context.Context, primitive.ObjectID, string, primitive.ObjectID, string, string, string) (ModeState, bool, error)
@@ -99,6 +101,8 @@ func (a *API) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		a.require(w, principal, "ledger.payout", func() { a.createAdjustment(w, r, principal, officeID) })
 	case r.Method == http.MethodPost && path == "/settlements":
 		a.require(w, principal, "ledger.payout", func() { a.createSettlement(w, r, principal, officeID) })
+	case r.Method == http.MethodPatch && strings.HasPrefix(path, "/settlements/"):
+		a.require(w, principal, "ledger.payout", func() { a.updateSettlement(w, r, principal, officeID, path) })
 	case r.Method == http.MethodGet && path == "/settlements":
 		a.require(w, principal, "ledger.read", func() { a.listSettlements(w, r, officeID) })
 	case r.Method == http.MethodPost && path == "/periods/close":
@@ -289,6 +293,27 @@ type settlementRequest struct {
 	IdempotencyKey string           `json:"idempotency_key"`
 }
 
+type settlementUpdateRequest struct {
+	AmountPaise   int64  `json:"amount_paise"`
+	PaymentMethod string `json:"payment_method"`
+	Reference     string `json:"reference"`
+	Remarks       string `json:"remarks"`
+}
+
+func validateSettlementDetails(amountPaise int64, paymentMethod, reference, remarks string) error {
+	if amountPaise <= 0 {
+		return errors.New("amount_paise must be greater than zero")
+	}
+	validMethods := map[string]bool{"cash": true, "bank_transfer": true, "upi": true, "other": true}
+	if !validMethods[paymentMethod] {
+		return errors.New("payment_method must be cash, bank_transfer, upi, or other")
+	}
+	if len(reference) > 200 || len(remarks) > 500 {
+		return errors.New("reference must be at most 200 characters; remarks at most 500")
+	}
+	return nil
+}
+
 func (a *API) createSettlement(w http.ResponseWriter, r *http.Request, principal Principal, officeID string) {
 	var input settlementRequest
 	if err := decodeJSON(r, &input); err != nil {
@@ -311,17 +336,12 @@ func (a *API) createSettlement(w http.ResponseWriter, r *http.Request, principal
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if input.AmountPaise <= 0 {
-		writeError(w, http.StatusBadRequest, errors.New("amount_paise must be greater than zero"))
-		return
-	}
-	validMethods := map[string]bool{"cash": true, "bank_transfer": true, "upi": true, "other": true}
-	if !validMethods[input.PaymentMethod] {
-		writeError(w, http.StatusBadRequest, errors.New("payment_method must be cash, bank_transfer, upi, or other"))
-		return
-	}
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	input.Reference, input.Remarks = strings.TrimSpace(input.Reference), strings.TrimSpace(input.Remarks)
+	if err := validateSettlementDetails(input.AmountPaise, input.PaymentMethod, input.Reference, input.Remarks); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if input.IdempotencyKey == "" {
 		writeError(w, http.StatusBadRequest, errors.New("idempotency_key is required"))
 		return
@@ -389,6 +409,76 @@ func (a *API) createSettlement(w http.ResponseWriter, r *http.Request, principal
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, map[string]interface{}{"settlement": settlement, "created": created})
+}
+
+func (a *API) updateSettlement(w http.ResponseWriter, r *http.Request, principal Principal, officeID, path string) {
+	settlementID := strings.TrimPrefix(path, "/settlements/")
+	if strings.Contains(settlementID, "/") {
+		writeError(w, http.StatusNotFound, errors.New("earnings endpoint not found"))
+		return
+	}
+	if err := validateObjectID("settlement_id", settlementID); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var input settlementUpdateRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.Reference, input.Remarks = strings.TrimSpace(input.Reference), strings.TrimSpace(input.Remarks)
+	if err := validateSettlementDetails(input.AmountPaise, input.PaymentMethod, input.Reference, input.Remarks); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.requireActiveStaff(w, r, principal.StaffID) || !a.requireExistingOffice(w, r, officeID) {
+		return
+	}
+	officeObjectID, settlementObjectID := mustObjectID(officeID), mustObjectID(settlementID)
+	existing, found, err := a.repo.FindSettlementByID(r.Context(), officeObjectID, settlementObjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("settlement not found"))
+		return
+	}
+	closed, err := a.repo.HasClosedPeriodOverlap(r.Context(), officeObjectID, existing.StartDate, existing.EndDate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if closed {
+		writeError(w, http.StatusConflict, errors.New("a payout in a closed earning period cannot be edited"))
+		return
+	}
+	activeRebuild, err := a.repo.HasActiveRebuildOverlap(r.Context(), officeObjectID, existing.StartDate, existing.EndDate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if activeRebuild {
+		writeError(w, http.StatusConflict, errors.New("an overlapping rebuild is queued or running"))
+		return
+	}
+	updated, err := a.repo.UpdateSettlement(r.Context(), officeObjectID, settlementObjectID, SettlementUpdate{
+		AmountPaise: input.AmountPaise, PaymentMethod: input.PaymentMethod,
+		Reference: input.Reference, Remarks: input.Remarks, UpdatedBy: mustObjectID(principal.StaffID),
+	})
+	if err != nil {
+		if errors.Is(err, ErrSettlementNotFound) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if errors.Is(err, ErrNoPendingEarnings) || errors.Is(err, ErrSettlementExceedsPending) {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"settlement": updated})
 }
 
 func (a *API) listRebuilds(w http.ResponseWriter, r *http.Request, officeID string) {

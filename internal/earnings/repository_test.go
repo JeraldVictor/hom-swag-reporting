@@ -512,3 +512,66 @@ func TestRepositoryFindSettlement(t *testing.T) {
 		}
 	})
 }
+
+func TestRepositoryUpdateSettlementMetadata(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	officeID, settlementID, actorID := primitive.NewObjectID(), primitive.NewObjectID(), primitive.NewObjectID()
+	mt.Run("updates metadata and retains a revision", func(mt *mtest.T) {
+		ns := mt.DB.Name() + "." + settlementCollection
+		doc := bson.D{
+			{Key: "_id", Value: settlementID}, {Key: "office_id", Value: officeID},
+			{Key: "amount_paise", Value: int64(500)}, {Key: "payment_method", Value: "cash"},
+			{Key: "reference", Value: "old"}, {Key: "remarks", Value: "before"},
+			{Key: "allocations", Value: bson.A{}},
+		}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, ns, mtest.FirstBatch, doc),
+			bson.D{{Key: "ok", Value: 1}, {Key: "n", Value: 1}, {Key: "nModified", Value: 1}},
+			commandOK(),
+		)
+		updated, err := NewRepository(mt.DB).UpdateSettlement(context.Background(), officeID, settlementID, SettlementUpdate{
+			AmountPaise: 500, PaymentMethod: "upi", Reference: "new", Remarks: "after", UpdatedBy: actorID,
+		})
+		if err != nil || updated.PaymentMethod != "upi" || updated.Reference != "new" || len(updated.RevisionHistory) != 1 {
+			mt.Fatalf("updated=%#v err=%v", updated, err)
+		}
+		if updated.RevisionHistory[0].PaymentMethod != "cash" || updated.RevisionHistory[0].EditedBy != actorID {
+			mt.Fatalf("revision=%#v", updated.RevisionHistory[0])
+		}
+	})
+	mt.Run("reallocates a corrected amount", func(mt *mtest.T) {
+		ns, ledgerNS := mt.DB.Name()+"."+settlementCollection, mt.DB.Name()+"."+ledgerCollection
+		entryID := primitive.NewObjectID()
+		doc := bson.D{
+			{Key: "_id", Value: settlementID}, {Key: "office_id", Value: officeID},
+			{Key: "worker_id", Value: primitive.NewObjectID()}, {Key: "worker_type", Value: "beautician"},
+			{Key: "bucket", Value: BucketCommission}, {Key: "start_date", Value: "2026-07-01"},
+			{Key: "end_date", Value: "2026-07-31"}, {Key: "amount_paise", Value: int64(500)},
+			{Key: "allocations", Value: bson.A{bson.D{{Key: "entry_id", Value: entryID}, {Key: "amount_paise", Value: int64(500)}}}},
+		}
+		settledEntry := bson.D{
+			{Key: "_id", Value: entryID}, {Key: "office_id", Value: officeID},
+			{Key: "amount_paise", Value: int64(500)}, {Key: "settled_amount_paise", Value: int64(500)},
+			{Key: "status", Value: StatusSettled},
+		}
+		openEntry := bson.D{
+			{Key: "_id", Value: entryID}, {Key: "office_id", Value: officeID},
+			{Key: "amount_paise", Value: int64(500)}, {Key: "settled_amount_paise", Value: int64(0)},
+			{Key: "status", Value: StatusOpen},
+		}
+		updatedOK := bson.D{{Key: "ok", Value: 1}, {Key: "n", Value: 1}, {Key: "nModified", Value: 1}}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, ns, mtest.FirstBatch, doc),
+			mtest.CreateCursorResponse(0, ledgerNS, mtest.FirstBatch, settledEntry),
+			updatedOK,
+			mtest.CreateCursorResponse(0, ledgerNS, mtest.FirstBatch, openEntry),
+			updatedOK, updatedOK, commandOK(),
+		)
+		updated, err := NewRepository(mt.DB).UpdateSettlement(context.Background(), officeID, settlementID, SettlementUpdate{
+			AmountPaise: 300, PaymentMethod: "cash", UpdatedBy: actorID,
+		})
+		if err != nil || updated.AmountPaise != 300 || len(updated.Allocations) != 1 || updated.Allocations[0].AmountPaise != 300 {
+			mt.Fatalf("updated=%#v err=%v", updated, err)
+		}
+	})
+}

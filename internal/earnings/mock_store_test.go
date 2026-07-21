@@ -52,6 +52,8 @@ type mockStore struct {
 	existingSettlement      Settlement
 	existingSettlementFound bool
 	existingSettlementErr   error
+	updatedSettlement       Settlement
+	updateSettlementErr     error
 	settlements             []Settlement
 	settlementsTotal        int64
 	settlementsErr          error
@@ -142,6 +144,23 @@ func (m *mockStore) AllocateSettlement(_ context.Context, settlement Settlement)
 }
 func (m *mockStore) FindSettlement(_ context.Context, _ primitive.ObjectID, _ string) (Settlement, bool, error) {
 	return m.existingSettlement, m.existingSettlementFound, m.existingSettlementErr
+}
+func (m *mockStore) FindSettlementByID(_ context.Context, _, _ primitive.ObjectID) (Settlement, bool, error) {
+	return m.existingSettlement, m.existingSettlementFound, m.existingSettlementErr
+}
+func (m *mockStore) UpdateSettlement(_ context.Context, _, _ primitive.ObjectID, update SettlementUpdate) (Settlement, error) {
+	m.lastSettlement.AmountPaise = update.AmountPaise
+	m.lastSettlement.PaymentMethod = update.PaymentMethod
+	m.lastSettlement.Reference = update.Reference
+	m.lastSettlement.Remarks = update.Remarks
+	if m.updatedSettlement.ID.IsZero() {
+		m.updatedSettlement = m.existingSettlement
+		m.updatedSettlement.AmountPaise = update.AmountPaise
+		m.updatedSettlement.PaymentMethod = update.PaymentMethod
+		m.updatedSettlement.Reference = update.Reference
+		m.updatedSettlement.Remarks = update.Remarks
+	}
+	return m.updatedSettlement, m.updateSettlementErr
 }
 func (m *mockStore) ListSettlements(_ context.Context, filter SettlementFilter) ([]Settlement, int64, error) {
 	m.lastSettlementFilter = filter
