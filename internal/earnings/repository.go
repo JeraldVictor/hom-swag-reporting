@@ -178,13 +178,53 @@ func (r *Repository) LoadTripSources(ctx context.Context, officeID primitive.Obj
 	}
 	defer cur.Close(ctx)
 	var rows []TripSource
-	return rows, cur.All(ctx, &rows)
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	if needsOfficeTripRates(rows) {
+		cost, mileage, err := r.loadOfficeTripRates(ctx, officeID)
+		if err != nil {
+			return nil, err
+		}
+		for index := range rows {
+			rows[index].OfficePetrolCostPerLiter = cost
+			rows[index].OfficeStandardMileagePerLiter = mileage
+		}
+	}
+	return rows, nil
 }
 
 func (r *Repository) LoadTripSource(ctx context.Context, sourceID primitive.ObjectID) (TripSource, error) {
 	var source TripSource
 	err := r.db.Collection("trips").FindOne(ctx, bson.M{"_id": sourceID}).Decode(&source)
+	if err == nil && needsOfficeTripRates([]TripSource{source}) {
+		source.OfficePetrolCostPerLiter, source.OfficeStandardMileagePerLiter, err = r.loadOfficeTripRates(ctx, source.OfficeID)
+	}
 	return source, err
+}
+
+func needsOfficeTripRates(trips []TripSource) bool {
+	for _, trip := range trips {
+		if trip.Snapshot != nil && trip.Snapshot.PetrolPayable == nil &&
+			(trip.FareCalculation.PetrolCostPerLiter <= 0 || trip.FareCalculation.StandardMileagePerLiter <= 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Repository) loadOfficeTripRates(ctx context.Context, officeID primitive.ObjectID) (float64, float64, error) {
+	var office struct {
+		PetrolCostPerLiter      float64 `bson:"petrol_cost_per_liter"`
+		StandardMileagePerLiter float64 `bson:"standard_mileage_per_liter"`
+	}
+	err := r.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}, options.FindOne().SetProjection(bson.M{
+		"petrol_cost_per_liter": 1, "standard_mileage_per_liter": 1,
+	})).Decode(&office)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return 0, 0, nil
+	}
+	return office.PetrolCostPerLiter, office.StandardMileagePerLiter, err
 }
 
 func (r *Repository) LoadWorkerTargets(ctx context.Context, officeID primitive.ObjectID) ([]WorkerTarget, error) {
@@ -234,13 +274,9 @@ func (r *Repository) LoadRiderLeaderboardSources(ctx context.Context, officeID p
 	match["office_id"] = officeID
 	workerExpr := payables.AllowanceWorkerIDExpr()
 	distanceExpr := payables.PaidSnapshotOrCanonicalExpr("payable_distance_km", payables.PayableDistanceExpr())
-	workerTypeExpr := bson.M{"$cond": bson.A{
-		bson.M{"$or": bson.A{bson.M{"$ne": bson.A{"$driver_beautician_id", nil}}, bson.M{"$and": bson.A{"$is_self_drive", bson.M{"$ne": bson.A{"$beautician_id", nil}}}}}},
-		"beautician", "rider",
-	}}
 	cursor, err := r.db.Collection("trips").Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: match}},
-		{{Key: "$addFields", Value: bson.M{"allowance_worker_id": workerExpr, "payable_distance_km": distanceExpr, "allowance_worker_type": workerTypeExpr}}},
+		{{Key: "$addFields", Value: bson.M{"allowance_worker_id": workerExpr, "payable_distance_km": distanceExpr, "allowance_worker_type": payables.AllowanceWorkerTypeExpr()}}},
 		{{Key: "$match", Value: bson.M{"allowance_worker_id": bson.M{"$ne": nil}}}},
 		{{Key: "$group", Value: bson.M{"_id": "$allowance_worker_id", "worker_type": bson.M{"$first": "$allowance_worker_type"}, "trip_count": bson.M{"$sum": 1}, "total_distance_km": bson.M{"$sum": "$payable_distance_km"}}}},
 	})

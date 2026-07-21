@@ -200,7 +200,9 @@ func TestChangeModeNegativePathsAndSuccess(t *testing.T) {
 
 	t.Run("requires cutover permission", func(t *testing.T) {
 		claims := validTestClaims()
-		claims["payload"].(map[string]interface{})["permissions"] = []string{"ledger.read"}
+		payload := claims["payload"].(map[string]interface{})
+		payload["is_admin"] = false
+		payload["permissions"] = []string{"ledger.read"}
 		response := performAPIRequest(t, newMockStore(), http.MethodPost, "/api/earnings/mode?office_id="+testOfficeID, shadowBody, claims)
 		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "ledger.cutover") {
 			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())

@@ -132,3 +132,12 @@ func TestPrincipalPermissionAndOfficeScope(t *testing.T) {
 		t.Fatalf("assigned office should be allowed: %v", err)
 	}
 }
+
+func TestAdminPermissionOverrideMatchesAdminApp(t *testing.T) {
+	if !(Principal{IsAdmin: true}).HasPermission("ledger.cutover") {
+		t.Fatal("administrator must retain full ledger control with a stale permission snapshot")
+	}
+	if (Principal{}).HasPermission("ledger.cutover") {
+		t.Fatal("non-admin without the permission must remain denied")
+	}
+}

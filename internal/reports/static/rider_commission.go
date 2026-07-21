@@ -93,7 +93,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 				bson.M{"beautician_id": staffID, "is_self_drive": true},
 			}})
 		}
-		return e.runLedger(ctx, req, sink, startDateKey, endDateKey, officeID, !officeID.IsZero(), staffID, hasStaffID, filteredMatch)
+		return e.runLedger(ctx, req, sink, startDateKey, endDateKey, officeID, !officeID.IsZero(), staffID, hasStaffID, filteredMatch, match)
 	}
 
 	legacyPayableDistanceExpr := tripPayableDistanceExpr()
@@ -236,6 +236,7 @@ func (e *RiderCommissionExecutor) runLedger(
 	staffID primitive.ObjectID,
 	hasStaffID bool,
 	tripMatch bson.M,
+	rankingTripMatch bson.M,
 ) error {
 	ledgerMatch := bson.M{
 		"service_date_key": bson.M{"$gte": startDate, "$lte": endDate},
@@ -344,6 +345,20 @@ func (e *RiderCommissionExecutor) runLedger(
 		return err
 	}
 
+	// Winning ranks are snapshotted on bonus ledger entries, but non-winning
+	// staff intentionally have no bonus entry. A staff-filtered authoritative
+	// report must therefore rank the selected rider against the whole office's
+	// trip statistics, not display an empty rank or rank the one visible row as
+	// first.
+	ranksByWorker := rankRiderRows(rowsByWorker)
+	if hasStaffID && amountsByWorker[staffID].LeaderboardRank == 0 {
+		rankingRows, err := e.loadRiderRankingRows(ctx, rankingTripMatch)
+		if err != nil {
+			return err
+		}
+		ranksByWorker = rankRiderRows(rankingRows)
+	}
+
 	workerIDs := make([]primitive.ObjectID, 0, len(rowsByWorker)+len(amountsByWorker))
 	seen := make(map[primitive.ObjectID]struct{}, len(rowsByWorker)+len(amountsByWorker))
 	for id := range rowsByWorker {
@@ -372,15 +387,57 @@ func (e *RiderCommissionExecutor) runLedger(
 		petrol := float64(amount.PetrolPayablePaise) / 100
 		commission := float64(amount.CommissionPayablePaise) / 100
 		bonus := float64(amount.LeaderboardBonusPaise) / 100
+		rank := amount.LeaderboardRank
+		if sourceRank := ranksByWorker[id]; sourceRank > 0 && (!hasStaffID || rank == 0) {
+			rank = sourceRank
+		}
 		if err := sink.WriteRow([]interface{}{
 			id.Hex(), row.EmpCode, row.Name, row.TripCount, fmt.Sprintf("%.2f", row.TotalDistanceKM),
-			fmt.Sprintf("%.2f", petrol), fmt.Sprintf("%.2f", commission), formatRank(amount.LeaderboardRank),
+			fmt.Sprintf("%.2f", petrol), fmt.Sprintf("%.2f", commission), formatRank(rank),
 			fmt.Sprintf("%.2f", bonus), fmt.Sprintf("%.2f", commission+bonus),
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (e *RiderCommissionExecutor) loadRiderRankingRows(ctx context.Context, match bson.M) (map[primitive.ObjectID]riderCommissionRow, error) {
+	distanceExpr := tripSnapshotOrLegacyExpr("payable_distance_km", tripPayableDistanceExpr())
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: match}},
+		{{Key: "$addFields", Value: bson.M{"allowance_worker_id": tripAllowanceWorkerIDExpr(), "payable_distance_km": distanceExpr}}},
+		{{Key: "$group", Value: bson.M{
+			"_id": "$allowance_worker_id", "total_distance_km": bson.M{"$sum": "$payable_distance_km"}, "trip_count": bson.M{"$sum": 1},
+		}}},
+		{{Key: "$match", Value: bson.M{"_id": bson.M{"$ne": nil}}}},
+	}
+	cursor, err := e.db.Collection("trips").Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	rows := map[primitive.ObjectID]riderCommissionRow{}
+	for cursor.Next(ctx) {
+		var row riderCommissionRow
+		if err := cursor.Decode(&row); err != nil {
+			return nil, err
+		}
+		rows[row.ID] = row
+	}
+	return rows, cursor.Err()
+}
+
+func rankRiderRows(rows map[primitive.ObjectID]riderCommissionRow) map[primitive.ObjectID]int {
+	scores := make([]leaderboard.RiderScore, 0, len(rows))
+	for _, row := range rows {
+		scores = append(scores, leaderboard.RiderScore{WorkerID: row.ID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
+	}
+	ranks := make(map[primitive.ObjectID]int, len(scores))
+	for _, award := range leaderboard.RankRiders(scores, nil) {
+		ranks[award.WorkerID] = award.Rank
+	}
+	return ranks
 }
 
 func riderCommissionHeader() []interface{} {

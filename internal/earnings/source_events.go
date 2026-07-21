@@ -247,7 +247,8 @@ func (p *SourceEventProcessor) processTrip(ctx context.Context, event SourceEven
 		if *item.amount == 0 {
 			continue
 		}
-		if err := putLedgerEntry(ctx, p.backend, sourceEntry(job, trip.ID, workerID, workerType, event.ServiceDate, item.component, item.bucket, moneyToPaise(*item.amount), trip.Snapshot.IsPaid), &result.Stats); err != nil {
+		paid := trip.Snapshot.IsPaid && item.component == ComponentPetrol
+		if err := putLedgerEntry(ctx, p.backend, sourceEntry(job, trip.ID, workerID, workerType, event.ServiceDate, item.component, item.bucket, moneyToPaise(*item.amount), paid), &result.Stats); err != nil {
 			return err
 		}
 	}

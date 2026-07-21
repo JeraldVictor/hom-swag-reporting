@@ -51,7 +51,9 @@ func TestAPIAuthorizationStopsBeforeRepositoryAccess(t *testing.T) {
 
 	t.Run("missing permission", func(t *testing.T) {
 		claims := validTestClaims()
-		claims["payload"].(map[string]interface{})["permissions"] = []string{}
+		payload := claims["payload"].(map[string]interface{})
+		payload["is_admin"] = false
+		payload["permissions"] = []string{}
 		token := signTestToken(t, secret, "HS256", claims)
 		request := httptest.NewRequest(http.MethodGet, "/api/earnings/status?office_id="+officeID, nil)
 		request.Header.Set("Authorization", "Bearer "+token)

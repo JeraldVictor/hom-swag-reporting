@@ -37,6 +37,19 @@ func TestRepositoryLoadTripSourcesUsesPayableEligibilityFilter(t *testing.T) {
 	})
 }
 
+func TestNeedsOfficeTripRatesOnlyForMissingLegacyPetrol(t *testing.T) {
+	value := 1.0
+	if needsOfficeTripRates(nil) || needsOfficeTripRates([]TripSource{{Snapshot: &PayableSnapshot{PetrolPayable: &value}}}) {
+		t.Fatal("complete snapshots must not require mutable office configuration")
+	}
+	if !needsOfficeTripRates([]TripSource{{Snapshot: &PayableSnapshot{IsPaid: true}}}) {
+		t.Fatal("incomplete imported snapshot must load the report fallback rates")
+	}
+	if needsOfficeTripRates([]TripSource{{Snapshot: &PayableSnapshot{}, FareCalculation: TripFareCalculation{PetrolCostPerLiter: 100, StandardMileagePerLiter: 30}}}) {
+		t.Fatal("historical fare inputs must take precedence over office fallback")
+	}
+}
+
 func TestRepositoryClaimNextRebuild(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 	id, office := primitive.NewObjectID(), primitive.NewObjectID()
@@ -127,7 +140,7 @@ func TestRepositoryLoadsExactSourceByID(t *testing.T) {
 	})
 	mt.Run("trip", func(mt *mtest.T) {
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, mt.DB.Name()+".trips", mtest.FirstBatch, bson.D{
-			{Key: "_id", Value: id}, {Key: "office_id", Value: office}, {Key: "payable_snapshot", Value: bson.D{{Key: "captured_at", Value: captured}}},
+			{Key: "_id", Value: id}, {Key: "office_id", Value: office}, {Key: "payable_snapshot", Value: bson.D{{Key: "captured_at", Value: captured}, {Key: "petrol_payable", Value: 0.0}}},
 		}))
 		row, err := NewRepository(mt.DB).LoadTripSource(context.Background(), id)
 		if err != nil || row.ID != id || row.Snapshot == nil || !row.Snapshot.CapturedAt.Equal(captured) {

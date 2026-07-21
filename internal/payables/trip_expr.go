@@ -15,8 +15,31 @@ func TripBaseMatch(startDateKey, endDateKey string) bson.M {
 
 func AllowanceWorkerIDExpr() bson.M {
 	return bson.M{"$ifNull": bson.A{"$driver_beautician_id", bson.M{"$cond": bson.A{
-		bson.M{"$and": bson.A{"$is_self_drive", bson.M{"$ne": bson.A{"$beautician_id", nil}}}}, "$beautician_id", "$rider_id",
+		bson.M{"$and": bson.A{
+			bson.M{"$eq": bson.A{bson.M{"$ifNull": bson.A{"$is_self_drive", false}}, true}},
+			bson.M{"$ne": bson.A{bson.M{"$ifNull": bson.A{"$beautician_id", nil}}, nil}},
+		}}, "$beautician_id", "$rider_id",
 	}}}}
+}
+
+// AllowanceWorkerTypeExpr must use the same null-safe precedence as
+// AllowanceWorkerIDExpr. MongoDB's $ne comparison against a missing field does
+// not behave like a comparison against an explicit null, which previously
+// caused legacy rider trips to be labelled as beautician earnings.
+func AllowanceWorkerTypeExpr() bson.M {
+	driver := bson.M{"$ifNull": bson.A{"$driver_beautician_id", nil}}
+	beautician := bson.M{"$ifNull": bson.A{"$beautician_id", nil}}
+	selfDrive := bson.M{"$ifNull": bson.A{"$is_self_drive", false}}
+	return bson.M{"$cond": bson.A{
+		bson.M{"$or": bson.A{
+			bson.M{"$ne": bson.A{driver, nil}},
+			bson.M{"$and": bson.A{
+				bson.M{"$eq": bson.A{selfDrive, true}},
+				bson.M{"$ne": bson.A{beautician, nil}},
+			}},
+		}},
+		"beautician", "rider",
+	}}
 }
 
 func SnapshotOrLegacyExpr(field string, legacy any) bson.M {

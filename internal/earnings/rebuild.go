@@ -77,6 +77,11 @@ type TripSource struct {
 	ExtraKM            float64             `bson:"extra_km"`
 	FareCalculation    TripFareCalculation `bson:"fare_calculation"`
 	Snapshot           *PayableSnapshot    `bson:"payable_snapshot"`
+	// Office rates are hydrated by the repository only when an imported legacy
+	// snapshot is missing petrol inputs. They mirror the static report's office
+	// lookup without mutating the source trip.
+	OfficePetrolCostPerLiter      float64 `bson:"-"`
+	OfficeStandardMileagePerLiter float64 `bson:"-"`
 }
 
 type WorkerTarget struct {
@@ -426,7 +431,13 @@ func (p *Processor) processTrips(ctx context.Context, job RebuildJob, stats *Reb
 			continue
 		}
 		workerID, workerType, ok := tripWorker(trip)
-		if !ok || trip.Snapshot == nil {
+		// The rider and petrol reports discard trips with no allowance worker.
+		// Rebuilds must do the same: these are transport data-quality records,
+		// not missing monetary snapshots and must never block earnings cutover.
+		if !ok {
+			continue
+		}
+		if trip.Snapshot == nil {
 			stats.MissingSnapshots++
 			continue
 		}
@@ -451,7 +462,13 @@ func (p *Processor) processTrips(ctx context.Context, job RebuildJob, stats *Reb
 			if *item.amount == 0 {
 				continue
 			}
-			entry := sourceEntry(job, trip.ID, workerID, workerType, trip.Date, item.component, item.bucket, moneyToPaise(*item.amount), trip.Snapshot.IsPaid)
+			// Legacy payable_snapshot.is_paid was written by both payout flows but
+			// the imported production data records these trip payments as petrol
+			// payouts. Do not falsely settle rider commission from that ambiguous
+			// flag; commission settlement is tracked by its typed payout/Go
+			// settlement record.
+			paid := trip.Snapshot.IsPaid && item.component == ComponentPetrol
+			entry := sourceEntry(job, trip.ID, workerID, workerType, trip.Date, item.component, item.bucket, moneyToPaise(*item.amount), paid)
 			if err := p.put(ctx, entry, stats); err != nil {
 				return err
 			}
@@ -496,6 +513,12 @@ func effectiveTripPayables(trip TripSource) (*float64, *float64) {
 	}
 	if trip.Snapshot.StandardMileagePerLiter != nil && *trip.Snapshot.StandardMileagePerLiter > 0 {
 		mileage = *trip.Snapshot.StandardMileagePerLiter
+	}
+	if cost <= 0 {
+		cost = trip.OfficePetrolCostPerLiter
+	}
+	if mileage <= 0 {
+		mileage = trip.OfficeStandardMileagePerLiter
 	}
 	if cost <= 0 || mileage <= 0 {
 		return &commission, trip.Snapshot.PetrolPayable

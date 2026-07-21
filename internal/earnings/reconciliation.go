@@ -165,7 +165,10 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 			continue
 		}
 		workerID, workerType, ok := tripWorker(trip)
-		if !ok || trip.Snapshot == nil || !validSourceDate(trip.Date) {
+		if !ok {
+			continue
+		}
+		if trip.Snapshot == nil || !validSourceDate(trip.Date) {
 			result.MissingSnapshots++
 			continue
 		}

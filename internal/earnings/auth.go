@@ -87,6 +87,13 @@ func VerifyAdminToken(header string, secret string) (Principal, error) {
 }
 
 func (p Principal) HasPermission(required string) bool {
+	// The Admin app deliberately treats is_admin as the platform-wide
+	// permission override. Mirror that contract at the Go boundary so a valid
+	// admin session does not lose newly introduced ledger controls merely
+	// because its JWT predates a role-permission catalogue sync.
+	if p.IsAdmin {
+		return true
+	}
 	for _, permission := range p.Permissions {
 		if permission == required || permission == "*:*" || permission == "*.*" {
 			return true

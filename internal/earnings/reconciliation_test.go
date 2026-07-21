@@ -214,6 +214,20 @@ func TestReconcilerCountsMissingSnapshotsAndIgnoresOutOfScopeData(t *testing.T) 
 	}
 }
 
+func TestReconcilerDoesNotTreatUnassignedTransportAsPayable(t *testing.T) {
+	backend, office, _, _ := reconciliationFixture()
+	backend.ledger[5].AmountPaise = 4000
+	zero := 0.0
+	backend.trips = append(backend.trips, TripSource{
+		ID: primitive.NewObjectID(), OfficeID: office, Date: "2026-07-12", Status: "completed",
+		Snapshot: &PayableSnapshot{CommissionPayable: &zero, PetrolPayable: &zero},
+	})
+	result, err := NewReconciler(backend).Run(context.Background(), office, "2026-07-01", "2026-07-31")
+	if err != nil || !result.Ready || result.MissingSnapshots != 0 {
+		t.Fatalf("unassigned transport blocked reconciliation: result=%+v err=%v", result, err)
+	}
+}
+
 func TestReconciliationHelpers(t *testing.T) {
 	values := map[reconciliationKey]int64{}
 	addReconciliationAmount(values, primitive.NewObjectID(), "rider", ComponentPetrol, BucketPetrol, 0)

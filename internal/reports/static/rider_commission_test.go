@@ -164,3 +164,41 @@ func TestRiderCommissionStaffFilterRanksAgainstWholeOffice(t *testing.T) {
 		}
 	})
 }
+
+func TestRiderCommissionAuthoritativeRanksNonWinnerAgainstWholeOffice(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	firstID := primitive.NewObjectID()
+	selectedID := primitive.NewObjectID()
+	officeID := primitive.NewObjectID()
+
+	mt.Run("non-winner has no bonus ledger row but retains rank", func(mt *mtest.T) {
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".earnings_ledger", mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: selectedID}, {Key: "name", Value: "Selected"},
+				{Key: "commission_payable_paise", Value: int64(1000)},
+			}),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".trips", mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: selectedID}, {Key: "name", Value: "Selected"},
+				{Key: "trip_count", Value: 5}, {Key: "total_distance_km", Value: 50.0},
+			}),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".trips", mtest.FirstBatch,
+				bson.D{{Key: "_id", Value: firstID}, {Key: "trip_count", Value: 10}, {Key: "total_distance_km", Value: 90.0}},
+				bson.D{{Key: "_id", Value: selectedID}, {Key: "trip_count", Value: 5}, {Key: "total_distance_km", Value: 50.0}},
+			),
+		)
+		req := riderCommissionRequest()
+		req.Parameters["office_id"] = officeID.Hex()
+		req.Parameters["staff_id"] = selectedID.Hex()
+		sink := &integrationSink{}
+		if err := NewRiderCommissionExecutorWithMode(mt.DB, "authoritative").Run(context.Background(), req, sink); err != nil {
+			mt.Fatalf("run: %v", err)
+		}
+		if len(sink.rows) != 2 || sink.rows[1][7] != "#2" || sink.rows[1][8] != "0.00" {
+			mt.Fatalf("selected authoritative row = %#v", sink.rows)
+		}
+		events := mt.GetAllStartedEvents()
+		if len(events) != 3 || events[2].Command.Lookup("aggregate").StringValue() != "trips" {
+			mt.Fatalf("expected whole-office ranking aggregate, events=%d", len(events))
+		}
+	})
+}

@@ -495,6 +495,47 @@ func TestEffectiveTripPayablesReconstructsIncompletePaidSnapshot(t *testing.T) {
 	}
 }
 
+func TestEffectiveTripPayablesUsesOfficeFallbackForImportedPaidSnapshot(t *testing.T) {
+	trip := TripSource{
+		IsTwoWay: true, IsCommissionable: true, CommissionAmount: 16, AutoDistanceKM: 7.99,
+		OfficePetrolCostPerLiter: 110.94, OfficeStandardMileagePerLiter: 35,
+		Snapshot: &PayableSnapshot{IsPaid: true},
+	}
+	commission, petrol := effectiveTripPayables(trip)
+	if commission == nil || *commission != 16 || petrol == nil || *petrol != 50.65 {
+		t.Fatalf("office fallback did not match static report: commission=%v petrol=%v", commission, petrol)
+	}
+
+	trip.Snapshot.PetrolPayable = float(9)
+	_, petrol = effectiveTripPayables(trip)
+	if petrol == nil || *petrol != 9 {
+		t.Fatalf("paid snapshot was overwritten by office fallback: petrol=%v", petrol)
+	}
+}
+
+func TestProcessorDoesNotSettleCommissionFromLegacyTripPaidFlag(t *testing.T) {
+	rider := primitive.NewObjectID()
+	job := RebuildJob{ID: primitive.NewObjectID(), OfficeID: primitive.NewObjectID(), Scope: "all", StartDate: "2026-07-01", EndDate: "2026-07-31"}
+	b := &rebuildBackend{job: job, trips: []TripSource{{
+		ID: primitive.NewObjectID(), RiderID: &rider, Date: "2026-07-01",
+		Snapshot: &PayableSnapshot{CommissionPayable: float(10), PetrolPayable: float(20), IsPaid: true},
+	}}}
+	if _, err := NewProcessor(b).ProcessNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.entries) != 2 {
+		t.Fatalf("entries=%#v", b.entries)
+	}
+	for _, entry := range b.entries {
+		if entry.Component == ComponentTripCommission && (entry.Status != StatusOpen || entry.SettledAmountPaise != 0) {
+			t.Fatalf("legacy petrol flag settled commission: %#v", entry)
+		}
+		if entry.Component == ComponentPetrol && (entry.Status != StatusSettled || entry.SettledAmountPaise != 2000) {
+			t.Fatalf("legacy petrol settlement was lost: %#v", entry)
+		}
+	}
+}
+
 func TestProcessorConflictsAndHelpers(t *testing.T) {
 	job := RebuildJob{OfficeID: primitive.NewObjectID(), RequestedBy: primitive.NewObjectID()}
 	entry := sourceEntry(job, primitive.NewObjectID(), primitive.NewObjectID(), "rider", "2026-07-01", ComponentPetrol, BucketPetrol, 123, false)
