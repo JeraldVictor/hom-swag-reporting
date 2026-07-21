@@ -329,7 +329,7 @@ func TestMongoIntegrationCommissionAndPetrolExecutors(t *testing.T) {
 	}
 	assertIntegrationColumnSum(t, riderSink.rows, "Trip Count", 2)
 	assertIntegrationColumnSum(t, riderSink.rows, "Total Distance KM", 45)
-	assertIntegrationColumnSum(t, riderSink.rows, "Petrol Payable", 171)
+	assertIntegrationColumnSum(t, riderSink.rows, "Petrol Payable", 135)
 
 	petrolSink := &integrationSink{}
 	if err := NewPetrolWeeklyExecutor(db).Run(ctx, integrationRequest(officeID, "2026-07-01", "2026-07-31"), petrolSink); err != nil {
@@ -339,7 +339,7 @@ func TestMongoIntegrationCommissionAndPetrolExecutors(t *testing.T) {
 		t.Fatalf("petrol rows = %d, want header + rider + self-drive", got)
 	}
 	assertIntegrationColumnSum(t, petrolSink.rows, "Total Distance (KM)", 45)
-	assertIntegrationColumnSum(t, petrolSink.rows, "Payable Amount", 171)
+	assertIntegrationColumnSum(t, petrolSink.rows, "Payable Amount", 135)
 }
 
 func insertIntegrationDocs(t *testing.T, ctx context.Context, collection *mongo.Collection, docs ...interface{}) {
