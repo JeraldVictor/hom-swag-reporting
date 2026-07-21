@@ -134,6 +134,28 @@ component, bucket, and leaderboard category. Manual adjustments are excluded so
 they cannot conceal a migration discrepancy. The response is ready for cutover
 only when every amount matches and no source snapshots are missing.
 
+### Order reconciliation
+
+The reporting service also owns the order-integrity workflow used by the admin
+Order Issues page:
+
+- `POST /api/earnings/order-issues/scan` (`ledger.rebuild`) scans completed
+  orders in a date range and idempotently recreates the persisted issue index.
+  This is safe to run after every production database restore. Previously open
+  issues that no longer reproduce are closed automatically.
+- `GET /api/earnings/order-issues` (`ledger.read`) lists office-scoped issues
+  with date, status, type, severity, order-number, and pagination filters.
+- `POST /api/earnings/order-issues/{id}/actions` rechecks an issue, accepts an
+  explained variance (`ledger.rebuild`), or aligns a payment record
+  (`ledger.payout`). Every non-recheck action requires an audit reason.
+
+Payment alignment is append-only: Go writes one signed reconciliation entry to
+the order's payment history and never edits or deletes the original payment
+events. The issue ID makes the correction idempotent. Daily Sales payment
+buckets include these signed entries, so subsequent reports reflect the audited
+correction. Orders with legacy payment fields but no history must be fixed at
+source and cannot be aligned automatically.
+
 ### Earnings source events
 
 The source-event topic accepts schema version 1 notifications. Notifications

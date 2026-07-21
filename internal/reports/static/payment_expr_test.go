@@ -107,6 +107,19 @@ func TestPaymentHistoryExpressionsMatchNodeLabelAndRefundParity(t *testing.T) {
 	assertEvaluatedMoney(t, "refund", paymentRefundExpr(), document, 65)
 }
 
+func TestPaymentHistoryExpressionsApplyAuditedReconciliationAdjustment(t *testing.T) {
+	document := map[string]any{
+		"payment": map[string]any{
+			"history": []any{
+				map[string]any{"label": "Online payment", "method": "online", "amount": 1045},
+				map[string]any{"label": "Reconciliation adjustment", "method": "online", "amount": -45},
+			},
+		},
+	}
+	assertEvaluatedMoney(t, "online", paymentOnlineExpr(), document, 1000)
+	assertEvaluatedMoney(t, "total_received", paymentReceivedExpr(), document, 1000)
+}
+
 func assertEvaluatedMoney(t *testing.T, label string, expr any, document map[string]any, expected float64) {
 	t.Helper()
 	got := testNumber(t, evalTestExpr(t, expr, document, nil))

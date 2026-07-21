@@ -23,7 +23,7 @@ func countResponse(namespace string, count int64) bson.D {
 func TestRepositoryIndexes(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 	mt.Run("success", func(mt *mtest.T) {
-		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandOK(), commandOK())
+		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandOK(), commandOK(), commandOK())
 		if err := NewRepository(mt.DB).EnsureIndexes(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -54,6 +54,12 @@ func TestRepositoryIndexes(t *testing.T) {
 	})
 	mt.Run("mode index error", func(mt *mtest.T) {
 		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandOK(), commandError())
+		if err := NewRepository(mt.DB).EnsureIndexes(context.Background()); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+	mt.Run("order issue index error", func(mt *mtest.T) {
+		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandOK(), commandOK(), commandError())
 		if err := NewRepository(mt.DB).EnsureIndexes(context.Background()); err == nil {
 			t.Fatal("expected error")
 		}

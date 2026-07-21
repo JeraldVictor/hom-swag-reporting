@@ -18,6 +18,7 @@ const (
 	rebuildCollection    = "earnings_rebuild_jobs"
 	settlementCollection = "earnings_settlements"
 	modeCollection       = "earnings_mode_settings"
+	orderIssueCollection = "earnings_order_issues"
 )
 
 var (
@@ -388,6 +389,14 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 	}
 	_, err = r.db.Collection(modeCollection).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "office_id", Value: 1}}, Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Collection(orderIssueCollection).Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "issue_key", Value: 1}}, Options: options.Index().SetUnique(true)},
+		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "status", Value: 1}, {Key: "service_date", Value: -1}}},
+		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "issue_type", Value: 1}, {Key: "severity", Value: 1}}},
 	})
 	return err
 }

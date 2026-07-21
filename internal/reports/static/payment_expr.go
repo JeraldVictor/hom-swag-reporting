@@ -198,7 +198,13 @@ func paymentHistoryLabelMatchesExpr(regex string) bson.M {
 
 func paymentHistoryCountablePaymentCond() bson.M {
 	return bson.M{"$and": bson.A{
-		bson.M{"$gt": bson.A{"$$this.amount", 0}},
+		bson.M{"$or": bson.A{
+			bson.M{"$gt": bson.A{"$$this.amount", 0}},
+			bson.M{"$and": bson.A{
+				bson.M{"$eq": bson.A{paymentHistoryLabelExpr(), "reconciliation_adjustment"}},
+				bson.M{"$ne": bson.A{"$$this.amount", 0}},
+			}},
+		}},
 		bson.M{"$ne": bson.A{paymentHistoryLabelExpr(), "tip"}},
 		bson.M{"$not": bson.A{paymentHistoryLabelMatchesExpr("refund")}},
 		bson.M{"$not": bson.A{paymentHistoryLabelMatchesExpr("cancellation_(fee|charge)")}},
