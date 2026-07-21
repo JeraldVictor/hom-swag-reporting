@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
@@ -14,11 +15,23 @@ import (
 )
 
 type BeauticianCommissionExecutor struct {
-	db *mongo.Database
+	db           *mongo.Database
+	mode         string
+	modeProvider EarningsModeProvider
 }
 
 func NewBeauticianCommissionExecutor(db *mongo.Database) *BeauticianCommissionExecutor {
-	return &BeauticianCommissionExecutor{db: db}
+	return NewBeauticianCommissionExecutorWithMode(db, "shadow")
+}
+
+// NewBeauticianCommissionExecutorWithMode preserves the order-backed report
+// unless earnings has explicitly been promoted to the authoritative source.
+func NewBeauticianCommissionExecutorWithMode(db *mongo.Database, mode string) *BeauticianCommissionExecutor {
+	return &BeauticianCommissionExecutor{db: db, mode: mode}
+}
+
+func NewBeauticianCommissionExecutorWithModeProvider(db *mongo.Database, mode string, provider EarningsModeProvider) *BeauticianCommissionExecutor {
+	return &BeauticianCommissionExecutor{db: db, mode: mode, modeProvider: provider}
 }
 
 func (e *BeauticianCommissionExecutor) Key() string {
@@ -67,6 +80,20 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		}
 		officeID = parsedOfficeID
 		match["office_id"] = officeID
+	}
+	mode, err := resolveEarningsMode(ctx, e.mode, e.modeProvider, officeID)
+	if err != nil {
+		return fmt.Errorf("resolve earnings mode: %w", err)
+	}
+
+	ledgerByBeautician := map[primitive.ObjectID]beauticianLedgerTotals{}
+	if mode == "authoritative" {
+		ledgerByBeautician, err = e.getLedgerTotalsByBeautician(
+			ctx, officeID, reportStaffID, startDateKey, endDateKey, monthEndDateKey(endDate),
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	pipeline := mongo.Pipeline{
@@ -122,7 +149,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		"order_count":                    1,
 	}}})
 
-	if req.Limit > 0 {
+	if req.Limit > 0 && mode != "authoritative" {
 		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: req.Limit}})
 	}
 
@@ -144,6 +171,30 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	}
 	if err := cursor.Err(); err != nil {
 		return err
+	}
+	if mode == "authoritative" {
+		seen := make(map[primitive.ObjectID]struct{}, len(rows))
+		for _, row := range rows {
+			seen[row.ID] = struct{}{}
+		}
+		for workerID, ledger := range ledgerByBeautician {
+			if _, exists := seen[workerID]; exists {
+				continue
+			}
+			rows = append(rows, beauticianCommissionRow{
+				ID: workerID, Name: ledger.Name, EmpCode: ledger.EmpCode,
+				MonthlyTarget1: ledger.MonthlyTarget1, MonthlyTarget2: ledger.MonthlyTarget2,
+			})
+			beauticianIDs = append(beauticianIDs, workerID)
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].ID.Hex() < rows[j].ID.Hex() })
+		if req.Limit > 0 && len(rows) > req.Limit {
+			rows = rows[:req.Limit]
+			beauticianIDs = beauticianIDs[:0]
+			for _, row := range rows {
+				beauticianIDs = append(beauticianIDs, row.ID)
+			}
+		}
 	}
 	// A staff-filtered overview must still expose configured targets when the
 	// worker has no orders in the selected period. This avoids making clients
@@ -178,9 +229,12 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	if err != nil {
 		return err
 	}
-	leaderboardByBeautician, err := e.getLeaderboardBonusByBeautician(ctx, officeID, startDate, endDate)
-	if err != nil {
-		return err
+	leaderboardByBeautician := map[primitive.ObjectID]beauticianLeaderboardBonus{}
+	if mode != "authoritative" {
+		leaderboardByBeautician, err = e.getLeaderboardBonusByBeautician(ctx, officeID, startDate, endDate)
+		if err != nil {
+			return err
+		}
 	}
 	target2Bonus, err := e.getOfficeTarget2Bonus(ctx, officeID)
 	if err != nil {
@@ -225,6 +279,16 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			payableTarget2Bonus = target2Bonus
 		}
 		leaderboard := leaderboardByBeautician[result.ID]
+		if mode == "authoritative" {
+			ledger := ledgerByBeautician[result.ID]
+			result.TotalSpecialCommission = paiseToMoney(ledger.SpecialCommissionPaise)
+			payableGeneralCommission = paiseToMoney(ledger.GeneralCommissionPaise)
+			result.TotalUpgradeAddonCommission = paiseToMoney(ledger.UpgradeCommissionPaise)
+			payableTarget2Bonus = paiseToMoney(ledger.TargetBonusPaise)
+			leaderboard = beauticianLeaderboardBonus{
+				Rank: ledger.LeaderboardRank, Bonus: paiseToMoney(ledger.LeaderboardBonusPaise),
+			}
+		}
 		totalCommission := roundPayment(
 			result.TotalSpecialCommission +
 				payableGeneralCommission +
@@ -286,6 +350,110 @@ type beauticianCommissionRow struct {
 	TotalRevenue                float64            `bson:"total_revenue"`
 	TotalRefund                 float64            `bson:"total_refund"`
 	OrderCount                  int                `bson:"order_count"`
+}
+
+type beauticianLedgerTotals struct {
+	ID                     primitive.ObjectID `bson:"_id"`
+	Name                   string             `bson:"name"`
+	EmpCode                string             `bson:"emp_code"`
+	MonthlyTarget1         float64            `bson:"monthly_target1"`
+	MonthlyTarget2         float64            `bson:"monthly_target2"`
+	SpecialCommissionPaise int64              `bson:"special_commission_paise"`
+	GeneralCommissionPaise int64              `bson:"general_commission_paise"`
+	UpgradeCommissionPaise int64              `bson:"upgrade_commission_paise"`
+	TargetBonusPaise       int64              `bson:"target_bonus_paise"`
+	LeaderboardBonusPaise  int64              `bson:"leaderboard_bonus_paise"`
+	LeaderboardRank        int                `bson:"leaderboard_rank"`
+}
+
+func (e *BeauticianCommissionExecutor) getLedgerTotalsByBeautician(
+	ctx context.Context,
+	officeID primitive.ObjectID,
+	staffID primitive.ObjectID,
+	startDate string,
+	endDate string,
+	targetMonthEnd string,
+) (map[primitive.ObjectID]beauticianLedgerTotals, error) {
+	componentAmount := func(component string) bson.M {
+		return bson.M{"$cond": bson.A{
+			bson.M{"$eq": bson.A{"$component", component}}, "$amount_paise", 0,
+		}}
+	}
+	match := bson.M{
+		"worker_type":       "beautician",
+		"settlement_bucket": "commission",
+		"status":            bson.M{"$ne": "void"},
+		"$or": bson.A{
+			bson.M{
+				"component":        bson.M{"$in": bson.A{"special_commission", "general_commission", "upgrade_addon_commission"}},
+				"service_date_key": bson.M{"$gte": startDate, "$lte": endDate},
+				"source_type":      "orders",
+				"source_id":        bson.M{"$ne": nil},
+			},
+			bson.M{"component": "target_bonus", "service_date_key": targetMonthEnd, "source_type": "targets"},
+			bson.M{
+				"component":                               "leaderboard_bonus",
+				"source_type":                             "leaderboards",
+				"configuration_snapshot.period_start":     startDate,
+				"configuration_snapshot.period_end":       endDate,
+				"configuration_snapshot.leaderboard_type": "beautician",
+			},
+		},
+	}
+	if !officeID.IsZero() {
+		match["office_id"] = officeID
+	}
+	if !staffID.IsZero() {
+		match["worker_id"] = staffID
+	}
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: match}},
+		{{Key: "$group", Value: bson.M{
+			"_id":                      "$worker_id",
+			"special_commission_paise": bson.M{"$sum": componentAmount("special_commission")},
+			"general_commission_paise": bson.M{"$sum": componentAmount("general_commission")},
+			"upgrade_commission_paise": bson.M{"$sum": componentAmount("upgrade_addon_commission")},
+			"target_bonus_paise":       bson.M{"$sum": componentAmount("target_bonus")},
+			"leaderboard_bonus_paise":  bson.M{"$sum": componentAmount("leaderboard_bonus")},
+			"leaderboard_rank": bson.M{"$max": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$component", "leaderboard_bonus"}},
+				bson.M{"$ifNull": bson.A{"$configuration_snapshot.rank", 0}}, 0,
+			}}},
+		}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from": "beauticians", "localField": "_id", "foreignField": "_id", "as": "beautician",
+		}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$beautician", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$project", Value: bson.M{
+			"name": "$beautician.name", "emp_code": "$beautician.emp_code",
+			"monthly_target1": "$beautician.monthly_target1", "monthly_target2": "$beautician.monthly_target2",
+			"special_commission_paise": 1, "general_commission_paise": 1,
+			"upgrade_commission_paise": 1, "target_bonus_paise": 1,
+			"leaderboard_bonus_paise": 1, "leaderboard_rank": 1,
+		}}},
+	}
+	cursor, err := e.db.Collection("earnings_ledger").Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	totals := map[primitive.ObjectID]beauticianLedgerTotals{}
+	for cursor.Next(ctx) {
+		var row beauticianLedgerTotals
+		if err := cursor.Decode(&row); err != nil {
+			return nil, err
+		}
+		totals[row.ID] = row
+	}
+	return totals, cursor.Err()
+}
+
+func paiseToMoney(value int64) float64 { return float64(value) / 100 }
+
+func monthEndDateKey(date time.Time) string {
+	return time.Date(date.Year(), date.Month()+1, 1, 0, 0, 0, 0, date.Location()).AddDate(0, 0, -1).Format("2006-01-02")
 }
 
 func completedOnlyExpr(value interface{}) bson.M {

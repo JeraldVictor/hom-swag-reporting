@@ -26,6 +26,7 @@ type Store interface {
 	Status(context.Context, string) (map[string]interface{}, error)
 	ListEntries(context.Context, LedgerFilter) ([]LedgerEntry, int64, error)
 	Summary(context.Context, string, string, string) ([]SummaryRow, error)
+	Reconcile(context.Context, primitive.ObjectID, string, string) (ReconciliationResult, error)
 	CreateAdjustment(context.Context, LedgerEntry) (LedgerEntry, bool, error)
 	OfficeExists(context.Context, primitive.ObjectID) (bool, error)
 	ActiveStaffExists(context.Context, primitive.ObjectID) (bool, error)
@@ -39,6 +40,8 @@ type Store interface {
 	AllocateSettlement(context.Context, Settlement) (Settlement, bool, error)
 	FindSettlement(context.Context, primitive.ObjectID, string) (Settlement, bool, error)
 	ListSettlements(context.Context, SettlementFilter) ([]Settlement, int64, error)
+	GetModeState(context.Context, primitive.ObjectID) (ModeState, error)
+	SetMode(context.Context, primitive.ObjectID, string, primitive.ObjectID, string, string, string) (ModeState, bool, error)
 }
 
 func NewAPI(repo Store, jwtSecret, mode string) *API {
@@ -78,6 +81,10 @@ func (a *API) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		a.require(w, principal, "ledger.read", func() { a.listLedger(w, r, officeID) })
 	case r.Method == http.MethodGet && path == "/summary":
 		a.require(w, principal, "ledger.read", func() { a.getSummary(w, r, officeID) })
+	case r.Method == http.MethodGet && path == "/reconciliation":
+		a.require(w, principal, "ledger.read", func() { a.getReconciliation(w, r, officeID) })
+	case r.Method == http.MethodPost && path == "/mode":
+		a.require(w, principal, "ledger.cutover", func() { a.changeMode(w, r, principal, officeID) })
 	case r.Method == http.MethodPost && path == "/adjustments":
 		a.require(w, principal, "ledger.payout", func() { a.createAdjustment(w, r, principal, officeID) })
 	case r.Method == http.MethodPost && path == "/settlements":
@@ -277,8 +284,99 @@ func (a *API) getStatus(w http.ResponseWriter, r *http.Request, officeID string)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	status["mode"], status["authoritative"] = a.mode, a.mode == ModeAuthoritative
+	modeState, err := a.repo.GetModeState(r.Context(), mustObjectID(officeID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	mode := modeState.Mode
+	if mode == "" {
+		mode = a.mode
+	}
+	status["mode"], status["authoritative"] = mode, mode == ModeAuthoritative
+	status["mode_updated_by"], status["mode_updated_at"] = modeState.UpdatedBy, modeState.UpdatedAt
 	writeJSON(w, http.StatusOK, status)
+}
+
+type modeChangeRequest struct {
+	Mode      string `json:"mode"`
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
+	Reason    string `json:"reason"`
+}
+
+func (a *API) changeMode(w http.ResponseWriter, r *http.Request, principal Principal, officeID string) {
+	var input modeChangeRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.Mode, input.Reason = strings.TrimSpace(input.Mode), strings.TrimSpace(input.Reason)
+	if input.Mode != ModeShadow && input.Mode != ModeAuthoritative {
+		writeError(w, http.StatusBadRequest, errors.New("mode must be shadow or authoritative"))
+		return
+	}
+	if input.Reason == "" || len(input.Reason) > 500 {
+		writeError(w, http.StatusBadRequest, errors.New("reason is required and must be at most 500 characters"))
+		return
+	}
+	if !a.requireActiveStaff(w, r, principal.StaffID) || !a.requireExistingOffice(w, r, officeID) {
+		return
+	}
+	officeObjectID := mustObjectID(officeID)
+	current, err := a.repo.GetModeState(r.Context(), officeObjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.Mode == input.Mode {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"state": current, "changed": false})
+		return
+	}
+
+	var reconciliation *ReconciliationResult
+	reconciliationFrom, reconciliationTo := "", ""
+	if input.Mode == ModeAuthoritative {
+		if err := validateDateRange(input.StartDate, input.EndDate); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		active, err := a.repo.HasActiveRebuildOverlap(r.Context(), officeObjectID, input.StartDate, input.EndDate)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if active {
+			writeError(w, http.StatusConflict, errors.New("an overlapping rebuild is queued or running"))
+			return
+		}
+		result, err := a.repo.Reconcile(r.Context(), officeObjectID, input.StartDate, input.EndDate)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		reconciliation = &result
+		if !result.Ready {
+			writeJSON(w, http.StatusConflict, map[string]interface{}{
+				"message":        "reconciliation is not ready for authoritative cutover",
+				"reconciliation": result,
+			})
+			return
+		}
+		reconciliationFrom, reconciliationTo = input.StartDate, input.EndDate
+	}
+
+	state, changed, err := a.repo.SetMode(
+		r.Context(), officeObjectID, input.Mode, mustObjectID(principal.StaffID), input.Reason,
+		reconciliationFrom, reconciliationTo,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"state": state, "changed": changed, "reconciliation": reconciliation,
+	})
 }
 
 func (a *API) listLedger(w http.ResponseWriter, r *http.Request, officeID string) {
@@ -326,6 +424,20 @@ func (a *API) getSummary(w http.ResponseWriter, r *http.Request, officeID string
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"components": rows, "earned_paise": earned, "settled_paise": settled, "pending_paise": earned - settled,
 	})
+}
+
+func (a *API) getReconciliation(w http.ResponseWriter, r *http.Request, officeID string) {
+	startDate, endDate := r.URL.Query().Get("start_date"), r.URL.Query().Get("end_date")
+	if err := validateDateRange(startDate, endDate); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := a.repo.Reconcile(r.Context(), mustObjectID(officeID), startDate, endDate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 type adjustmentRequest struct {

@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -60,9 +62,29 @@ func Load() *Config {
 		EnableOTEL:                  getEnvBool("ENABLE_OTEL", false),
 		OTELTracesURL:               getEnv("OTEL_TRACES_ENDPOINT", "http://127.0.0.1:4318/v1/traces"),
 		OTELServiceName:             getEnv("OTEL_REPORTING_SERVICE_NAME", "reporting-service"),
-		JWTSecret:                   getEnv("JWT_SECRET", ""),
+		JWTSecret:                   getJWTSecret(),
 		EarningsMode:                getEnv("EARNINGS_MODE", "shadow"),
 	}
+}
+
+// getJWTSecret supports normal environment injection in every deployment. For
+// local multi-repo development only, JWT_SECRET_ENV_FILE may point at the
+// server's dotenv file so both processes use the same signer without copying a
+// secret into reporting/.env. Only JWT_SECRET is read from that file.
+func getJWTSecret() string {
+	if secret := strings.TrimSpace(getEnv("JWT_SECRET", "")); secret != "" {
+		return secret
+	}
+	path := strings.TrimSpace(getEnv("JWT_SECRET_ENV_FILE", ""))
+	if path == "" {
+		return ""
+	}
+	values, err := godotenv.Read(path)
+	if err != nil {
+		log.Printf("Warning: JWT_SECRET_ENV_FILE could not be read: %v", err)
+		return ""
+	}
+	return strings.TrimSpace(values["JWT_SECRET"])
 }
 
 func getMinIOEndpoint() string {

@@ -42,13 +42,13 @@ func (w *SourceEventWorker) Start(ctx context.Context) {
 		}
 		messageCtx, span := w.consumer.StartMessageSpan(ctx, message)
 		for messageCtx.Err() == nil {
-			job, created, processErr := w.processor.ProcessJSON(messageCtx, message.Value)
+			result, created, processErr := w.processor.ProcessJSON(messageCtx, message.Value)
 			if processErr == nil {
 				if err := w.consumer.CommitMessages(messageCtx, message); err != nil {
 					log.Printf("earnings source-event commit failed: %v", err)
 					continue
 				}
-				log.Printf("earnings source event accepted: rebuild=%s created=%t", job.ID.Hex(), created)
+				log.Printf("earnings source event accepted: source=%s/%s created=%t ignored=%t", result.SourceType, result.SourceID.Hex(), created, result.Ignored)
 				break
 			}
 			span.RecordError(processErr)

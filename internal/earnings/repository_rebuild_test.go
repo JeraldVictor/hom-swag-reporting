@@ -109,6 +109,44 @@ func TestRepositoryLoadRawSources(t *testing.T) {
 	}
 }
 
+func TestRepositoryLoadsExactSourceByID(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	id, office := primitive.NewObjectID(), primitive.NewObjectID()
+	captured := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	mt.Run("order", func(mt *mtest.T) {
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, mt.DB.Name()+".orders", mtest.FirstBatch, bson.D{
+			{Key: "_id", Value: id}, {Key: "office_id", Value: office}, {Key: "commission_snapshot", Value: bson.D{{Key: "captured_at", Value: captured}}},
+		}))
+		row, err := NewRepository(mt.DB).LoadOrderSource(context.Background(), id)
+		if err != nil || row.ID != id || row.Snapshot == nil || !row.Snapshot.CapturedAt.Equal(captured) {
+			t.Fatalf("row=%+v err=%v", row, err)
+		}
+		if event := mt.GetStartedEvent(); event == nil || !strings.Contains(event.Command.String(), id.Hex()) {
+			t.Fatalf("exact id missing from query: %+v", event)
+		}
+	})
+	mt.Run("trip", func(mt *mtest.T) {
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, mt.DB.Name()+".trips", mtest.FirstBatch, bson.D{
+			{Key: "_id", Value: id}, {Key: "office_id", Value: office}, {Key: "payable_snapshot", Value: bson.D{{Key: "captured_at", Value: captured}}},
+		}))
+		row, err := NewRepository(mt.DB).LoadTripSource(context.Background(), id)
+		if err != nil || row.ID != id || row.Snapshot == nil || !row.Snapshot.CapturedAt.Equal(captured) {
+			t.Fatalf("row=%+v err=%v", row, err)
+		}
+	})
+	for _, call := range []func(*Repository) error{
+		func(r *Repository) error { _, err := r.LoadOrderSource(context.Background(), id); return err },
+		func(r *Repository) error { _, err := r.LoadTripSource(context.Background(), id); return err },
+	} {
+		mt.Run("error", func(mt *mtest.T) {
+			mt.AddMockResponses(commandError())
+			if err := call(NewRepository(mt.DB)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestRepositoryLoadOrderSourcesRequiresCompletedStatus(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 	office := primitive.NewObjectID()

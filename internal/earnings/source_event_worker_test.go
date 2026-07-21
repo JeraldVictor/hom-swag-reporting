@@ -85,7 +85,7 @@ func TestSourceEventWorkerCommitsAcceptedAndPermanentMessages(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			consumer := &sourceConsumerStub{message: kafka.Message{Key: []byte("source"), Value: test.payload}, cancel: cancel, commitErrors: []error{errors.New("commit once"), nil}}
 			dlq := &sourceDeadLetterStub{}
-			worker := NewSourceEventWorker(consumer, dlq, &sourceEventBackendStub{})
+			worker := NewSourceEventWorker(consumer, dlq, defaultSourceBackend())
 			worker.wait = func(context.Context) bool { return true }
 			worker.Start(ctx)
 			if consumer.commits != 2 || dlq.sends != test.wantDLQ {
@@ -101,8 +101,8 @@ func TestSourceEventWorkerRetriesWithoutCommit(t *testing.T) {
 		backend *sourceEventBackendStub
 		dlq     *sourceDeadLetterStub
 	}{
-		{name: "store failure", backend: &sourceEventBackendStub{queueErr: errors.New("mongo")}, dlq: &sourceDeadLetterStub{}},
-		{name: "dead letter failure", backend: &sourceEventBackendStub{}, dlq: &sourceDeadLetterStub{err: errors.New("kafka")}},
+		{name: "store failure", backend: func() *sourceEventBackendStub { b := defaultSourceBackend(); b.loadErr = errors.New("mongo"); return b }(), dlq: &sourceDeadLetterStub{}},
+		{name: "dead letter failure", backend: defaultSourceBackend(), dlq: &sourceDeadLetterStub{err: errors.New("kafka")}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -132,7 +132,7 @@ func TestSourceEventWorkerRetriesWithoutCommit(t *testing.T) {
 func TestSourceEventWorkerStopsAfterFetchErrorAndRetryWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	consumer := &sourceConsumerStub{fetchErr: errors.New("fetch"), cancel: cancel, cancelOnFetch: 2}
-	NewSourceEventWorker(consumer, &sourceDeadLetterStub{}, &sourceEventBackendStub{}).Start(ctx)
+	NewSourceEventWorker(consumer, &sourceDeadLetterStub{}, defaultSourceBackend()).Start(ctx)
 
 	cancelled, stop := context.WithCancel(context.Background())
 	stop()

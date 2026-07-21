@@ -17,6 +17,7 @@ const (
 	periodCollection     = "earnings_periods"
 	rebuildCollection    = "earnings_rebuild_jobs"
 	settlementCollection = "earnings_settlements"
+	modeCollection       = "earnings_mode_settings"
 )
 
 var (
@@ -26,11 +27,90 @@ var (
 
 type Repository struct {
 	db           *mongo.Database
+	defaultMode  string
 	startSession func(...*options.SessionOptions) (mongo.Session, error)
 }
 
 func NewRepository(db *mongo.Database) *Repository {
-	return &Repository{db: db, startSession: db.Client().StartSession}
+	return NewRepositoryWithMode(db, ModeShadow)
+}
+
+func NewRepositoryWithMode(db *mongo.Database, defaultMode string) *Repository {
+	if defaultMode != ModeAuthoritative {
+		defaultMode = ModeShadow
+	}
+	return &Repository{db: db, defaultMode: defaultMode, startSession: db.Client().StartSession}
+}
+
+func (r *Repository) Mode(ctx context.Context, officeID primitive.ObjectID) (string, error) {
+	state, err := r.GetModeState(ctx, officeID)
+	return state.Mode, err
+}
+
+func (r *Repository) GetModeState(ctx context.Context, officeID primitive.ObjectID) (ModeState, error) {
+	var state ModeState
+	err := r.db.Collection(modeCollection).FindOne(ctx, bson.M{"office_id": officeID}).Decode(&state)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return ModeState{OfficeID: officeID, Mode: r.defaultMode, History: []ModeChange{}}, nil
+	}
+	if err != nil {
+		return ModeState{}, err
+	}
+	if state.Mode != ModeAuthoritative {
+		state.Mode = ModeShadow
+	}
+	return state, nil
+}
+
+func (r *Repository) SetMode(ctx context.Context, officeID primitive.ObjectID, mode string, actorID primitive.ObjectID, reason, reconciliationFrom, reconciliationTo string) (ModeState, bool, error) {
+	current, err := r.GetModeState(ctx, officeID)
+	if err != nil {
+		return ModeState{}, false, err
+	}
+	if current.Mode == mode {
+		return current, false, nil
+	}
+	now := time.Now().UTC()
+	change := ModeChange{
+		PreviousMode: current.Mode, Mode: mode, Reason: reason, ChangedBy: actorID, ChangedAt: now,
+		ReconciliationFrom: reconciliationFrom, ReconciliationTo: reconciliationTo,
+	}
+	result := r.db.Collection(modeCollection).FindOneAndUpdate(ctx,
+		bson.M{"office_id": officeID},
+		bson.M{
+			"$setOnInsert": bson.M{"office_id": officeID, "created_at": now},
+			"$set":         bson.M{"mode": mode, "updated_by": actorID, "updated_at": now},
+			"$push":        bson.M{"history": change},
+		},
+		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
+	)
+	var state ModeState
+	if err := result.Decode(&state); err != nil {
+		return ModeState{}, false, err
+	}
+	return state, true, nil
+}
+
+func (r *Repository) Reconcile(ctx context.Context, officeID primitive.ObjectID, startDate, endDate string) (ReconciliationResult, error) {
+	return NewReconciler(r).Run(ctx, officeID, startDate, endDate)
+}
+
+func (r *Repository) LoadReconciliationLedger(ctx context.Context, officeID primitive.ObjectID, startDate, endDate string) ([]LedgerEntry, error) {
+	cursor, err := r.db.Collection(ledgerCollection).Find(ctx, bson.M{
+		"office_id":        officeID,
+		"status":           bson.M{"$ne": StatusVoid},
+		"service_date_key": bson.M{"$gte": startDate, "$lte": monthEndDate(endDate)},
+		"component": bson.M{"$in": bson.A{
+			ComponentSpecialCommission, ComponentGeneralCommission, ComponentUpgradeCommission,
+			ComponentTripCommission, ComponentPetrol, ComponentTargetBonus, ComponentLeaderboardBonus,
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var entries []LedgerEntry
+	return entries, cursor.All(ctx, &entries)
 }
 
 // ClaimNextRebuild atomically claims the oldest queued rebuild. Keeping the
@@ -77,6 +157,15 @@ func (r *Repository) LoadOrderSources(ctx context.Context, officeID primitive.Ob
 	return rows, cur.All(ctx, &rows)
 }
 
+func (r *Repository) LoadOrderSource(ctx context.Context, sourceID primitive.ObjectID) (OrderSource, error) {
+	var source OrderSource
+	err := r.db.Collection("orders").FindOne(ctx, bson.M{"_id": sourceID}, options.FindOne().SetProjection(bson.M{
+		"_id": 1, "office_id": 1, "beautician_id": 1, "status": 1,
+		"booking_info.date": 1, "commission_snapshot": 1, "is_deleted": 1,
+	})).Decode(&source)
+	return source, err
+}
+
 func (r *Repository) LoadTripSources(ctx context.Context, officeID primitive.ObjectID, startDate, endDate string) ([]TripSource, error) {
 	// Keep ledger eligibility identical to the static rider and petrol reports.
 	// In particular, snapshots on cancelled or in-progress trips must never
@@ -90,6 +179,12 @@ func (r *Repository) LoadTripSources(ctx context.Context, officeID primitive.Obj
 	defer cur.Close(ctx)
 	var rows []TripSource
 	return rows, cur.All(ctx, &rows)
+}
+
+func (r *Repository) LoadTripSource(ctx context.Context, sourceID primitive.ObjectID) (TripSource, error) {
+	var source TripSource
+	err := r.db.Collection("trips").FindOne(ctx, bson.M{"_id": sourceID}).Decode(&source)
+	return source, err
 }
 
 func (r *Repository) LoadWorkerTargets(ctx context.Context, officeID primitive.ObjectID) ([]WorkerTarget, error) {
@@ -221,6 +316,12 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 	_, err = r.db.Collection(settlementCollection).Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "idempotency_key", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "worker_id", Value: 1}, {Key: "created_at", Value: -1}}},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Collection(modeCollection).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "office_id", Value: 1}}, Options: options.Index().SetUnique(true),
 	})
 	return err
 }

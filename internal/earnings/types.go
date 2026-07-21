@@ -11,6 +11,24 @@ const (
 	ModeAuthoritative = "authoritative"
 )
 
+type ModeChange struct {
+	PreviousMode       string             `bson:"previous_mode" json:"previous_mode"`
+	Mode               string             `bson:"mode" json:"mode"`
+	Reason             string             `bson:"reason" json:"reason"`
+	ChangedBy          primitive.ObjectID `bson:"changed_by" json:"changed_by"`
+	ChangedAt          time.Time          `bson:"changed_at" json:"changed_at"`
+	ReconciliationFrom string             `bson:"reconciliation_from,omitempty" json:"reconciliation_from,omitempty"`
+	ReconciliationTo   string             `bson:"reconciliation_to,omitempty" json:"reconciliation_to,omitempty"`
+}
+
+type ModeState struct {
+	OfficeID  primitive.ObjectID `bson:"office_id" json:"office_id"`
+	Mode      string             `bson:"mode" json:"mode"`
+	UpdatedBy primitive.ObjectID `bson:"updated_by,omitempty" json:"updated_by,omitempty"`
+	UpdatedAt time.Time          `bson:"updated_at,omitempty" json:"updated_at,omitempty"`
+	History   []ModeChange       `bson:"history,omitempty" json:"history,omitempty"`
+}
+
 type Component string
 
 const (

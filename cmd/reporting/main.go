@@ -18,6 +18,7 @@ import (
 	"github.com/JeraldVictor/hom-swag-reporting/internal/earnings"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/jobs"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/kafka"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/minio"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/mongo"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/observability"
@@ -349,11 +350,21 @@ func main() {
 	deadLetterProducer := kafka.NewProducer(brokers, cfg.DeadLetterTopic)
 	defer deadLetterProducer.Close()
 
+	// Earnings mode is persisted per office. The environment value is only the
+	// fallback for offices that have never been explicitly configured.
+	earningsRepository := earnings.NewRepositoryWithMode(mongoClient.Database, cfg.EarningsMode)
+	indexCtx, cancelIndexes := context.WithTimeout(ctx, 10*time.Second)
+	if err := earningsRepository.EnsureIndexes(indexCtx); err != nil {
+		cancelIndexes()
+		log.Fatalf("Failed to ensure earnings indexes: %v", err)
+	}
+	cancelIndexes()
+
 	// Initialize Registry
 	registry := reports.NewRegistry()
-	registry.Register(static.NewRiderCommissionExecutor(mongoClient.Database))
-	registry.Register(static.NewBeauticianCommissionExecutor(mongoClient.Database))
-	registry.Register(static.NewPetrolWeeklyExecutorWithMode(mongoClient.Database, cfg.EarningsMode))
+	registry.Register(static.NewRiderCommissionExecutorWithModeProvider(mongoClient.Database, cfg.EarningsMode, earningsRepository))
+	registry.Register(static.NewBeauticianCommissionExecutorWithModeProvider(mongoClient.Database, cfg.EarningsMode, earningsRepository))
+	registry.Register(static.NewPetrolWeeklyExecutorWithModeProvider(mongoClient.Database, cfg.EarningsMode, earningsRepository))
 	registry.Register(static.NewDailySalesExecutor(mongoClient.Database))
 	registry.Register(static.NewStaffSummaryExecutor(mongoClient.Database))
 	registry.Register(static.NewCODPendingExecutor(mongoClient.Database))
@@ -368,15 +379,10 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	earningsRepository := earnings.NewRepository(mongoClient.Database)
-	indexCtx, cancelIndexes := context.WithTimeout(ctx, 10*time.Second)
-	if err := earningsRepository.EnsureIndexes(indexCtx); err != nil {
-		cancelIndexes()
-		log.Fatalf("Failed to ensure earnings indexes: %v", err)
-	}
-	cancelIndexes()
 	earningsAPI := earnings.NewAPI(earningsRepository, cfg.JWTSecret, cfg.EarningsMode)
 	mux.Handle("/api/earnings/", earningsAPI.Handler())
+	leaderboardAPI := leaderboard.NewAPI(leaderboard.NewService(leaderboard.NewMongoStore(mongoClient.Database)))
+	mux.Handle("/leaderboard", leaderboardAPI.Handler())
 
 	// Source notifications contain identifiers and dates only. The worker
 	// queues an idempotent rebuild which reloads persisted monetary snapshots

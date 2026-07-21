@@ -23,7 +23,7 @@ func countResponse(namespace string, count int64) bson.D {
 func TestRepositoryIndexes(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 	mt.Run("success", func(mt *mtest.T) {
-		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandOK())
+		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandOK(), commandOK())
 		if err := NewRepository(mt.DB).EnsureIndexes(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -50,6 +50,80 @@ func TestRepositoryIndexes(t *testing.T) {
 		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandError())
 		if err := NewRepository(mt.DB).EnsureIndexes(context.Background()); err == nil {
 			t.Fatal("expected error")
+		}
+	})
+	mt.Run("mode index error", func(mt *mtest.T) {
+		mt.AddMockResponses(commandOK(), commandOK(), commandOK(), commandOK(), commandError())
+		if err := NewRepository(mt.DB).EnsureIndexes(context.Background()); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestRepositoryModeStateAndChanges(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	officeID, actorID := primitive.NewObjectID(), primitive.NewObjectID()
+	namespace := func(mt *mtest.T) string { return mt.DB.Name() + "." + modeCollection }
+
+	mt.Run("missing state uses configured authoritative default", func(mt *mtest.T) {
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, namespace(mt), mtest.FirstBatch))
+		state, err := NewRepositoryWithMode(mt.DB, ModeAuthoritative).GetModeState(context.Background(), officeID)
+		if err != nil || state.Mode != ModeAuthoritative || state.OfficeID != officeID || state.History == nil {
+			mt.Fatalf("state=%#v err=%v", state, err)
+		}
+	})
+	mt.Run("invalid default fails closed to shadow", func(mt *mtest.T) {
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, namespace(mt), mtest.FirstBatch))
+		mode, err := NewRepositoryWithMode(mt.DB, "invalid").Mode(context.Background(), officeID)
+		if err != nil || mode != ModeShadow {
+			mt.Fatalf("mode=%q err=%v", mode, err)
+		}
+	})
+	mt.Run("stored unknown mode fails closed to shadow", func(mt *mtest.T) {
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, namespace(mt), mtest.FirstBatch, bson.D{
+			{Key: "office_id", Value: officeID}, {Key: "mode", Value: "unknown"},
+		}))
+		state, err := NewRepository(mt.DB).GetModeState(context.Background(), officeID)
+		if err != nil || state.Mode != ModeShadow {
+			mt.Fatalf("state=%#v err=%v", state, err)
+		}
+	})
+	mt.Run("state lookup error", func(mt *mtest.T) {
+		mt.AddMockResponses(commandError())
+		if _, err := NewRepository(mt.DB).GetModeState(context.Background(), officeID); err == nil {
+			mt.Fatal("expected error")
+		}
+	})
+	mt.Run("same mode is idempotent", func(mt *mtest.T) {
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, namespace(mt), mtest.FirstBatch, bson.D{
+			{Key: "office_id", Value: officeID}, {Key: "mode", Value: ModeShadow},
+		}))
+		state, changed, err := NewRepository(mt.DB).SetMode(context.Background(), officeID, ModeShadow, actorID, "same", "", "")
+		if err != nil || changed || state.Mode != ModeShadow {
+			mt.Fatalf("state=%#v changed=%t err=%v", state, changed, err)
+		}
+	})
+	mt.Run("mode change is persisted with audit metadata", func(mt *mtest.T) {
+		stored := bson.D{{Key: "office_id", Value: officeID}, {Key: "mode", Value: ModeAuthoritative}, {Key: "updated_by", Value: actorID}}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, namespace(mt), mtest.FirstBatch),
+			mtest.CreateSuccessResponse(bson.E{Key: "value", Value: stored}),
+		)
+		state, changed, err := NewRepository(mt.DB).SetMode(context.Background(), officeID, ModeAuthoritative, actorID, "approved", "2026-07-01", "2026-07-31")
+		if err != nil || !changed || state.Mode != ModeAuthoritative || state.UpdatedBy != actorID {
+			mt.Fatalf("state=%#v changed=%t err=%v", state, changed, err)
+		}
+	})
+	mt.Run("mode change lookup error", func(mt *mtest.T) {
+		mt.AddMockResponses(commandError())
+		if _, _, err := NewRepository(mt.DB).SetMode(context.Background(), officeID, ModeAuthoritative, actorID, "x", "", ""); err == nil {
+			mt.Fatal("expected error")
+		}
+	})
+	mt.Run("mode update error", func(mt *mtest.T) {
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, namespace(mt), mtest.FirstBatch), commandError())
+		if _, _, err := NewRepository(mt.DB).SetMode(context.Background(), officeID, ModeAuthoritative, actorID, "x", "", ""); err == nil {
+			mt.Fatal("expected error")
 		}
 	})
 }

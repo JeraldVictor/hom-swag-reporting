@@ -3,6 +3,7 @@ package static
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
@@ -13,11 +14,24 @@ import (
 )
 
 type RiderCommissionExecutor struct {
-	db *mongo.Database
+	db           *mongo.Database
+	mode         string
+	modeProvider EarningsModeProvider
 }
 
 func NewRiderCommissionExecutor(db *mongo.Database) *RiderCommissionExecutor {
-	return &RiderCommissionExecutor{db: db}
+	return NewRiderCommissionExecutorWithMode(db, "shadow")
+}
+
+// NewRiderCommissionExecutorWithMode preserves the trip-backed calculation in
+// shadow mode. Only the explicit authoritative mode reads payable amounts and
+// leaderboard awards from the immutable earnings ledger.
+func NewRiderCommissionExecutorWithMode(db *mongo.Database, mode string) *RiderCommissionExecutor {
+	return &RiderCommissionExecutor{db: db, mode: mode}
+}
+
+func NewRiderCommissionExecutorWithModeProvider(db *mongo.Database, mode string, provider EarningsModeProvider) *RiderCommissionExecutor {
+	return &RiderCommissionExecutor{db: db, mode: mode, modeProvider: provider}
 }
 
 func (e *RiderCommissionExecutor) Key() string {
@@ -51,7 +65,8 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
 	match := payableTripBaseMatch(startDateKey, endDateKey)
-	if staffID, ok := reportObjectID(req.Parameters, "staff_id"); ok {
+	staffID, hasStaffID := reportObjectID(req.Parameters, "staff_id")
+	if hasStaffID {
 		match["$and"] = append(match["$and"].(bson.A), bson.M{"$or": bson.A{
 			bson.M{"rider_id": staffID},
 			bson.M{"driver_beautician_id": staffID},
@@ -67,6 +82,13 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		}
 		officeID = parsedOfficeID
 		match["office_id"] = officeID
+	}
+	mode, err := resolveEarningsMode(ctx, e.mode, e.modeProvider, officeID)
+	if err != nil {
+		return fmt.Errorf("resolve earnings mode: %w", err)
+	}
+	if mode == "authoritative" {
+		return e.runLedger(ctx, req, sink, startDateKey, endDateKey, officeID, !officeID.IsZero(), staffID, hasStaffID, match)
 	}
 
 	legacyPayableDistanceExpr := tripPayableDistanceExpr()
@@ -164,18 +186,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 
 	// Header
-	sink.WriteRow([]interface{}{
-		"Staff ID",
-		"Employee Code",
-		"Rider Name",
-		"Trip Count",
-		"Total Distance KM",
-		"Petrol Payable",
-		"Trip Commission",
-		"Leaderboard Rank",
-		"Leaderboard Bonus",
-		"Total Commission",
-	})
+	sink.WriteRow(riderCommissionHeader())
 
 	for _, result := range rows {
 		leaderboard := leaderboardByRider[result.ID]
@@ -195,6 +206,180 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 	}
 
 	return nil
+}
+
+type riderLedgerAmounts struct {
+	ID                     primitive.ObjectID `bson:"_id"`
+	Name                   string             `bson:"name"`
+	EmpCode                string             `bson:"emp_code"`
+	PetrolPayablePaise     int64              `bson:"petrol_payable_paise"`
+	CommissionPayablePaise int64              `bson:"commission_payable_paise"`
+	LeaderboardBonusPaise  int64              `bson:"leaderboard_bonus_paise"`
+	LeaderboardRank        int                `bson:"leaderboard_rank"`
+}
+
+func (e *RiderCommissionExecutor) runLedger(
+	ctx context.Context,
+	req reports.Request,
+	sink reports.RowSink,
+	startDate, endDate string,
+	officeID primitive.ObjectID,
+	hasOfficeID bool,
+	staffID primitive.ObjectID,
+	hasStaffID bool,
+	tripMatch bson.M,
+) error {
+	ledgerMatch := bson.M{
+		"service_date_key": bson.M{"$gte": startDate, "$lte": endDate},
+		"status":           bson.M{"$ne": "void"},
+		"$or": bson.A{
+			bson.M{"component": bson.M{"$in": bson.A{"trip_commission", "petrol"}}, "source_type": "trips", "source_id": bson.M{"$ne": nil}},
+			bson.M{
+				"component": "leaderboard_bonus", "configuration_snapshot.leaderboard_type": "rider",
+				"configuration_snapshot.period_start": startDate, "configuration_snapshot.period_end": endDate,
+			},
+		},
+	}
+	if hasOfficeID {
+		ledgerMatch["office_id"] = officeID
+	}
+	if hasStaffID {
+		ledgerMatch["worker_id"] = staffID
+	}
+
+	ledgerPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: ledgerMatch}},
+		{{Key: "$group", Value: bson.M{
+			"_id": "$worker_id",
+			"petrol_payable_paise": bson.M{"$sum": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$component", "petrol"}}, "$amount_paise", 0,
+			}}},
+			"commission_payable_paise": bson.M{"$sum": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$component", "trip_commission"}}, "$amount_paise", 0,
+			}}},
+			"leaderboard_bonus_paise": bson.M{"$sum": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$component", "leaderboard_bonus"}}, "$amount_paise", 0,
+			}}},
+			"leaderboard_rank": bson.M{"$min": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$component", "leaderboard_bonus"}}, "$configuration_snapshot.rank", 2147483647,
+			}}},
+		}}},
+		{{Key: "$lookup", Value: bson.M{"from": "riders", "localField": "_id", "foreignField": "_id", "as": "rider"}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$rider", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$lookup", Value: bson.M{"from": "beauticians", "localField": "_id", "foreignField": "_id", "as": "beautician"}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$beautician", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$project", Value: bson.M{
+			"name":                 bson.M{"$ifNull": bson.A{"$rider.name", "$beautician.name"}},
+			"emp_code":             bson.M{"$ifNull": bson.A{"$rider.emp_code", "$beautician.emp_code"}},
+			"petrol_payable_paise": 1, "commission_payable_paise": 1,
+			"leaderboard_bonus_paise": 1,
+			"leaderboard_rank": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$leaderboard_rank", 2147483647}}, 0, "$leaderboard_rank",
+			}},
+		}}},
+	}
+	ledgerCursor, err := e.db.Collection("earnings_ledger").Aggregate(ctx, ledgerPipeline)
+	if err != nil {
+		return err
+	}
+	defer ledgerCursor.Close(ctx)
+
+	amountsByWorker := make(map[primitive.ObjectID]riderLedgerAmounts)
+	for ledgerCursor.Next(ctx) {
+		var amount riderLedgerAmounts
+		if err := ledgerCursor.Decode(&amount); err != nil {
+			return err
+		}
+		amountsByWorker[amount.ID] = amount
+	}
+	if err := ledgerCursor.Err(); err != nil {
+		return err
+	}
+
+	// Trips contribute descriptive columns only. They are deliberately queried
+	// independently because zero-value trip/payable entries are not materialized
+	// in the ledger and must still count as trips in the report.
+	distanceExpr := tripSnapshotOrLegacyExpr("payable_distance_km", tripPayableDistanceExpr())
+	tripPipeline := mongo.Pipeline{{{Key: "$match", Value: tripMatch}}}
+	tripPipeline = append(tripPipeline, tripOfficeLookupStages()...)
+	tripPipeline = append(tripPipeline,
+		bson.D{{Key: "$addFields", Value: bson.M{"allowance_worker_id": tripAllowanceWorkerIDExpr(), "payable_distance_km": distanceExpr}}},
+		bson.D{{Key: "$group", Value: bson.M{
+			"_id": "$allowance_worker_id", "total_distance_km": bson.M{"$sum": "$payable_distance_km"}, "trip_count": bson.M{"$sum": 1},
+		}}},
+		bson.D{{Key: "$match", Value: bson.M{"_id": bson.M{"$ne": nil}}}},
+		bson.D{{Key: "$lookup", Value: bson.M{"from": "riders", "localField": "_id", "foreignField": "_id", "as": "rider"}}},
+		bson.D{{Key: "$unwind", Value: bson.M{"path": "$rider", "preserveNullAndEmptyArrays": true}}},
+		bson.D{{Key: "$lookup", Value: bson.M{"from": "beauticians", "localField": "_id", "foreignField": "_id", "as": "beautician"}}},
+		bson.D{{Key: "$unwind", Value: bson.M{"path": "$beautician", "preserveNullAndEmptyArrays": true}}},
+		bson.D{{Key: "$project", Value: bson.M{
+			"name":              bson.M{"$ifNull": bson.A{"$rider.name", "$beautician.name"}},
+			"emp_code":          bson.M{"$ifNull": bson.A{"$rider.emp_code", "$beautician.emp_code"}},
+			"total_distance_km": 1, "trip_count": 1,
+		}}},
+	)
+	tripCursor, err := e.db.Collection("trips").Aggregate(ctx, tripPipeline)
+	if err != nil {
+		return err
+	}
+	defer tripCursor.Close(ctx)
+
+	rowsByWorker := make(map[primitive.ObjectID]riderCommissionRow)
+	for tripCursor.Next(ctx) {
+		var row riderCommissionRow
+		if err := tripCursor.Decode(&row); err != nil {
+			return err
+		}
+		rowsByWorker[row.ID] = row
+	}
+	if err := tripCursor.Err(); err != nil {
+		return err
+	}
+
+	workerIDs := make([]primitive.ObjectID, 0, len(rowsByWorker)+len(amountsByWorker))
+	seen := make(map[primitive.ObjectID]struct{}, len(rowsByWorker)+len(amountsByWorker))
+	for id := range rowsByWorker {
+		seen[id] = struct{}{}
+		workerIDs = append(workerIDs, id)
+	}
+	for id := range amountsByWorker {
+		if _, exists := seen[id]; !exists {
+			workerIDs = append(workerIDs, id)
+		}
+	}
+	sort.Slice(workerIDs, func(i, j int) bool { return workerIDs[i].Hex() < workerIDs[j].Hex() })
+	if req.Limit > 0 && len(workerIDs) > req.Limit {
+		workerIDs = workerIDs[:req.Limit]
+	}
+
+	if err := sink.WriteRow(riderCommissionHeader()); err != nil {
+		return err
+	}
+	for _, id := range workerIDs {
+		row := rowsByWorker[id]
+		amount := amountsByWorker[id]
+		if row.Name == "" {
+			row.Name, row.EmpCode = amount.Name, amount.EmpCode
+		}
+		petrol := float64(amount.PetrolPayablePaise) / 100
+		commission := float64(amount.CommissionPayablePaise) / 100
+		bonus := float64(amount.LeaderboardBonusPaise) / 100
+		if err := sink.WriteRow([]interface{}{
+			id.Hex(), row.EmpCode, row.Name, row.TripCount, fmt.Sprintf("%.2f", row.TotalDistanceKM),
+			fmt.Sprintf("%.2f", petrol), fmt.Sprintf("%.2f", commission), formatRank(amount.LeaderboardRank),
+			fmt.Sprintf("%.2f", bonus), fmt.Sprintf("%.2f", commission+bonus),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func riderCommissionHeader() []interface{} {
+	return []interface{}{
+		"Staff ID", "Employee Code", "Rider Name", "Trip Count", "Total Distance KM",
+		"Petrol Payable", "Trip Commission", "Leaderboard Rank", "Leaderboard Bonus", "Total Commission",
+	}
 }
 
 type riderCommissionRow struct {

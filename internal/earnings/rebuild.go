@@ -18,11 +18,12 @@ var ErrNoQueuedRebuild = errors.New("no queued earnings rebuild")
 const leaderboardCalculationVersion = 2
 
 type CommissionSnapshot struct {
-	OrderCost              *float64 `bson:"order_cost"`
-	SpecialCommission      *float64 `bson:"special_commission"`
-	GeneralCommission      *float64 `bson:"general_commission"`
-	UpgradeAddonCommission *float64 `bson:"upgrade_addon_commission"`
-	IsPaid                 bool     `bson:"is_paid"`
+	OrderCost              *float64  `bson:"order_cost"`
+	SpecialCommission      *float64  `bson:"special_commission"`
+	GeneralCommission      *float64  `bson:"general_commission"`
+	UpgradeAddonCommission *float64  `bson:"upgrade_addon_commission"`
+	IsPaid                 bool      `bson:"is_paid"`
+	CapturedAt             time.Time `bson:"captured_at"`
 }
 
 type OrderBookingInfo struct {
@@ -34,14 +35,16 @@ type OrderSource struct {
 	OfficeID     primitive.ObjectID  `bson:"office_id"`
 	BeauticianID primitive.ObjectID  `bson:"beautician_id"`
 	Status       string              `bson:"status"`
+	IsDeleted    bool                `bson:"is_deleted"`
 	BookingInfo  OrderBookingInfo    `bson:"booking_info"`
 	Snapshot     *CommissionSnapshot `bson:"commission_snapshot"`
 }
 
 type PayableSnapshot struct {
-	CommissionPayable *float64 `bson:"commission_payable"`
-	PetrolPayable     *float64 `bson:"petrol_payable"`
-	IsPaid            bool     `bson:"is_paid"`
+	CommissionPayable *float64  `bson:"commission_payable"`
+	PetrolPayable     *float64  `bson:"petrol_payable"`
+	IsPaid            bool      `bson:"is_paid"`
+	CapturedAt        time.Time `bson:"captured_at"`
 }
 
 type TripSource struct {
@@ -52,6 +55,9 @@ type TripSource struct {
 	BeauticianID       *primitive.ObjectID `bson:"beautician_id"`
 	IsSelfDrive        bool                `bson:"is_self_drive"`
 	Date               string              `bson:"date"`
+	Status             string              `bson:"status"`
+	KanbanState        string              `bson:"kanban_state"`
+	IsDeleted          bool                `bson:"is_deleted"`
 	Snapshot           *PayableSnapshot    `bson:"payable_snapshot"`
 }
 
@@ -436,7 +442,15 @@ func (p *Processor) processTrips(ctx context.Context, job RebuildJob, stats *Reb
 }
 
 func (p *Processor) put(ctx context.Context, entry LedgerEntry, stats *RebuildStats) error {
-	stored, created, err := p.backend.PutSourceEntry(ctx, entry)
+	return putLedgerEntry(ctx, p.backend, entry, stats)
+}
+
+type sourceEntryPutter interface {
+	PutSourceEntry(context.Context, LedgerEntry) (LedgerEntry, bool, error)
+}
+
+func putLedgerEntry(ctx context.Context, backend sourceEntryPutter, entry LedgerEntry, stats *RebuildStats) error {
+	stored, created, err := backend.PutSourceEntry(ctx, entry)
 	if err != nil {
 		return err
 	}

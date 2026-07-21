@@ -11,8 +11,9 @@ import (
 )
 
 type PetrolWeeklyExecutor struct {
-	db   *mongo.Database
-	mode string
+	db           *mongo.Database
+	mode         string
+	modeProvider EarningsModeProvider
 }
 
 func NewPetrolWeeklyExecutor(db *mongo.Database) *PetrolWeeklyExecutor {
@@ -24,6 +25,10 @@ func NewPetrolWeeklyExecutor(db *mongo.Database) *PetrolWeeklyExecutor {
 // after the service is explicitly made authoritative.
 func NewPetrolWeeklyExecutorWithMode(db *mongo.Database, mode string) *PetrolWeeklyExecutor {
 	return &PetrolWeeklyExecutor{db: db, mode: mode}
+}
+
+func NewPetrolWeeklyExecutorWithModeProvider(db *mongo.Database, mode string, provider EarningsModeProvider) *PetrolWeeklyExecutor {
+	return &PetrolWeeklyExecutor{db: db, mode: mode, modeProvider: provider}
 }
 
 func (e *PetrolWeeklyExecutor) Key() string {
@@ -65,7 +70,11 @@ func (e *PetrolWeeklyExecutor) Run(ctx context.Context, req reports.Request, sin
 		match["office_id"] = officeID
 	}
 
-	if e.mode == "authoritative" {
+	mode, err := resolveEarningsMode(ctx, e.mode, e.modeProvider, officeID)
+	if err != nil {
+		return fmt.Errorf("resolve earnings mode: %w", err)
+	}
+	if mode == "authoritative" {
 		return e.runLedger(ctx, req, sink, matchStart, matchEnd, officeID, hasOfficeID)
 	}
 	return e.runLegacy(ctx, req, sink, match)

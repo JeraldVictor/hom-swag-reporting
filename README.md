@@ -28,6 +28,7 @@ before any production payout reads are switched over.
   - `datasets/`: Approved dataset definitions for dynamic reports.
 - `internal/render/`: CSV and XLSX output writers.
 - `internal/earnings/`: Authenticated earnings ledger and administrative controls.
+- `internal/leaderboard/`: Canonical beautician and rider ranking API for admin and field clients.
 
 ## Implemented Static Reports
 
@@ -36,6 +37,20 @@ before any production payout reads are switched over.
 3. `petrol_weekly`: Weekly rider petrol calculation.
 4. `daily_sales`: Daily sales trends and summaries.
 5. `staff_summary`: Staff leave and overtime summary.
+
+## Leaderboard API
+
+`POST /leaderboard` is the single calculation path for admin and field
+leaderboards. It owns period boundaries, source aggregation, complaint
+deductions, deterministic tie-breaking, office prize lookup, field permission
+checks, masking, and self-entry selection. The TypeScript server only validates
+its client-facing request, resolves the authenticated user's office for field
+requests, and proxies this endpoint.
+
+When `REPORTING_API_TOKEN` is configured, the TypeScript server and reporting
+service must use the same value. Supported periods are `weekly`, `monthly`,
+`yearly`, `financial_year`, and `all_time`; supported roles are `beautician`
+and `rider`.
 
 ## Running Locally
 
@@ -57,13 +72,18 @@ before any production payout reads are switched over.
 
 Set the same `JWT_SECRET` used by the TypeScript server. Admin requests use the
 logged-in staff JWT and an `office_id`; the old shared reporting token is not
-accepted for earnings writes.
+accepted for earnings writes. In the local multi-repo workspace,
+`JWT_SECRET_ENV_FILE=../server/.env` may be used instead; reporting reads only
+the `JWT_SECRET` entry and direct environment injection always takes precedence.
 
 Environment:
 
-- `EARNINGS_MODE=shadow` keeps the ledger isolated from production payouts.
-- `EARNINGS_MODE=authoritative` is reserved for the final cutover after parity
-  checks and payout allocation support are complete.
+- `EARNINGS_MODE=shadow` is the safe default for offices without persisted mode
+  configuration.
+- `EARNINGS_MODE=authoritative` may be used as an initial deployment fallback,
+  but office-specific mode changes should be performed through the authenticated
+  admin cutover control. Rider commission, beautician commission, and petrol
+  weekly reports resolve the persisted office mode on every execution.
 - `EARNINGS_SOURCE_TOPIC=homswag.earnings.sources` carries persisted order and
   trip snapshot notifications.
 - `EARNINGS_SOURCE_CONSUMER_GROUP=homswag-reporting-earnings-sources` isolates
@@ -74,6 +94,15 @@ Permissions:
 - `ledger.read`: service status, summaries, and ledger entries.
 - `ledger.payout`: manual adjustments and period closure.
 - `ledger.rebuild`: queue source-to-ledger reconstruction requests.
+- `ledger.cutover`: promote an office to authoritative mode or return it to
+  shadow mode.
+
+`POST /api/earnings/mode` changes mode for one office. Promotion to
+`authoritative` is rejected while a rebuild overlaps the verification range or
+when reconciliation contains any mismatch or missing snapshot. Returning to
+`shadow` remains available as an immediate rollback. Every successful change
+stores the staff actor, reason, verification range, timestamp, and previous
+mode in the office's mode history.
 
 All money in the ledger and write API is stored as integer paise. Mutation
 requests are idempotent, office-scoped, and attributed to the authenticated
@@ -95,16 +124,27 @@ and retain the effective prize schedule, a content-addressed configuration
 version, and the ranking/tie-break contract on every award. Replaying the same
 logical office/period/worker award is idempotent; a changed calculation or
 configuration is surfaced as a rebuild conflict instead of creating a duplicate
-payable. Production parity verification must still be completed before switching
-`EARNINGS_MODE` to `authoritative`.
+payable. Production parity verification must still be completed before promoting
+an office to authoritative mode.
+
+`GET /api/earnings/reconciliation?office_id=<id>&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
+recalculates canonical order, trip, target, and exact-period leaderboard
+earnings from source snapshots and compares them with the ledger by worker,
+component, bucket, and leaderboard category. Manual adjustments are excluded so
+they cannot conceal a migration discrepancy. The response is ready for cutover
+only when every amount matches and no source snapshots are missing.
 
 ### Earnings source events
 
 The source-event topic accepts schema version 1 notifications. Notifications
-do not carry monetary values: Go reloads the persisted source and snapshot from
-Mongo through an idempotent, single-day `commissions` rebuild. Invalid events
-and attempts to mutate closed earning periods go to the reporting dead-letter
-topic. Mongo failures are retried without committing the Kafka offset.
+do not carry monetary values: Go reloads the exact persisted order or trip and
+materializes its snapshot directly into the ledger. Order events also evaluate
+the affected beautician-month so crossing target 1 materializes general
+commission for earlier eligible orders and crossing target 2 creates the
+month-scoped bonus. No day-wide rebuild is queued. Invalid events and attempts
+to mutate closed earning periods go to the reporting dead-letter topic. Mongo
+failures and events whose snapshot version has not reached Mongo yet are
+retried without committing the Kafka offset; stale events are safely ignored.
 
 ```json
 {

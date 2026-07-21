@@ -15,6 +15,8 @@ type mockStore struct {
 	entriesErr              error
 	summary                 []SummaryRow
 	summaryErr              error
+	reconciliation          ReconciliationResult
+	reconciliationErr       error
 	adjustment              LedgerEntry
 	adjustmentCreated       bool
 	adjustmentErr           error
@@ -54,6 +56,12 @@ type mockStore struct {
 	settlementsTotal        int64
 	settlementsErr          error
 	lastSettlementFilter    SettlementFilter
+	modeState               ModeState
+	modeStateErr            error
+	modeChanged             bool
+	setModeErr              error
+	lastMode                string
+	lastModeReason          string
 }
 
 func newMockStore() *mockStore {
@@ -61,6 +69,7 @@ func newMockStore() *mockStore {
 		status: map[string]interface{}{"ledger_entries": int64(1)}, officeExists: true,
 		activeStaff: true, workerExists: true, adjustmentCreated: true,
 		periodCreated: true, rebuildCreated: true, settlementCreated: true,
+		modeChanged: true,
 	}
 }
 
@@ -76,6 +85,9 @@ func (m *mockStore) ListEntries(_ context.Context, filter LedgerFilter) ([]Ledge
 }
 func (m *mockStore) Summary(context.Context, string, string, string) ([]SummaryRow, error) {
 	return m.summary, m.summaryErr
+}
+func (m *mockStore) Reconcile(context.Context, primitive.ObjectID, string, string) (ReconciliationResult, error) {
+	return m.reconciliation, m.reconciliationErr
 }
 func (m *mockStore) CreateAdjustment(_ context.Context, entry LedgerEntry) (LedgerEntry, bool, error) {
 	m.lastAdjustment = entry
@@ -132,6 +144,17 @@ func (m *mockStore) FindSettlement(_ context.Context, _ primitive.ObjectID, _ st
 func (m *mockStore) ListSettlements(_ context.Context, filter SettlementFilter) ([]Settlement, int64, error) {
 	m.lastSettlementFilter = filter
 	return m.settlements, m.settlementsTotal, m.settlementsErr
+}
+func (m *mockStore) GetModeState(context.Context, primitive.ObjectID) (ModeState, error) {
+	return m.modeState, m.modeStateErr
+}
+func (m *mockStore) SetMode(_ context.Context, officeID primitive.ObjectID, mode string, _ primitive.ObjectID, reason, _, _ string) (ModeState, bool, error) {
+	m.lastMode, m.lastModeReason = mode, reason
+	if m.setModeErr != nil {
+		return ModeState{}, false, m.setModeErr
+	}
+	m.modeState.OfficeID, m.modeState.Mode = officeID, mode
+	return m.modeState, m.modeChanged, nil
 }
 
 var errStore = errors.New("store failure")

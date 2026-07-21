@@ -33,7 +33,7 @@ func validTestClaims() map[string]interface{} {
 			"office_id":   "507f1f77bcf86cd799439012",
 			"is_admin":    true,
 			"office_ids":  []string{"507f1f77bcf86cd799439012"},
-			"permissions": []string{"ledger.read", "ledger.payout", "ledger.rebuild"},
+			"permissions": []string{"ledger.read", "ledger.payout", "ledger.rebuild", "ledger.cutover"},
 		},
 		"exp": time.Now().Add(time.Hour).Unix(),
 	}

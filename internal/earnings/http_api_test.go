@@ -75,6 +75,14 @@ func TestAPIRoutingAndReadEndpoints(t *testing.T) {
 			t.Fatalf("status = %d", response.Code)
 		}
 	})
+	t.Run("status mode repository error", func(t *testing.T) {
+		store := newMockStore()
+		store.modeStateErr = errStore
+		response := performAPIRequest(t, store, http.MethodGet, "/api/earnings/status?office_id="+testOfficeID, "", validTestClaims())
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d", response.Code)
+		}
+	})
 	t.Run("unknown endpoint and method", func(t *testing.T) {
 		for _, target := range []struct{ method, path string }{{http.MethodGet, "/api/earnings/missing"}, {http.MethodDelete, "/api/earnings/status"}} {
 			response := performAPIRequest(t, newMockStore(), target.method, target.path+"?office_id="+testOfficeID, "", validTestClaims())
@@ -141,6 +149,64 @@ func TestAPIRoutingAndReadEndpoints(t *testing.T) {
 			t.Fatalf("status = %d", response.Code)
 		}
 	})
+}
+
+func TestChangeModeNegativePathsAndSuccess(t *testing.T) {
+	authoritativeBody := `{"mode":"authoritative","start_date":"2026-07-01","end_date":"2026-07-31","reason":"approved cutover"}`
+	shadowBody := `{"mode":"shadow","reason":"incident rollback"}`
+
+	t.Run("requires cutover permission", func(t *testing.T) {
+		claims := validTestClaims()
+		claims["payload"].(map[string]interface{})["permissions"] = []string{"ledger.read"}
+		response := performAPIRequest(t, newMockStore(), http.MethodPost, "/api/earnings/mode?office_id="+testOfficeID, shadowBody, claims)
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "ledger.cutover") {
+			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+		}
+	})
+
+	tests := []struct {
+		name string
+		body string
+		set  func(*mockStore)
+		want int
+	}{
+		{name: "malformed json", body: `{`, want: 400},
+		{name: "invalid mode", body: `{"mode":"live","reason":"x"}`, want: 400},
+		{name: "missing reason", body: `{"mode":"shadow","reason":" "}`, want: 400},
+		{name: "long reason", body: `{"mode":"shadow","reason":"` + strings.Repeat("x", 501) + `"}`, want: 400},
+		{name: "staff lookup error", body: shadowBody, set: func(s *mockStore) { s.activeStaffErr = errStore }, want: 500},
+		{name: "inactive staff", body: shadowBody, set: func(s *mockStore) { s.activeStaff = false }, want: 403},
+		{name: "office lookup error", body: shadowBody, set: func(s *mockStore) { s.officeErr = errStore }, want: 500},
+		{name: "office missing", body: shadowBody, set: func(s *mockStore) { s.officeExists = false }, want: 404},
+		{name: "current mode error", body: shadowBody, set: func(s *mockStore) { s.modeStateErr = errStore }, want: 500},
+		{name: "unchanged", body: shadowBody, set: func(s *mockStore) { s.modeState.Mode = ModeShadow }, want: 200},
+		{name: "invalid cutover range", body: `{"mode":"authoritative","start_date":"bad","end_date":"2026-07-31","reason":"x"}`, want: 400},
+		{name: "active rebuild lookup error", body: authoritativeBody, set: func(s *mockStore) { s.activeRebuildErr = errStore }, want: 500},
+		{name: "active rebuild", body: authoritativeBody, set: func(s *mockStore) { s.activeRebuild = true }, want: 409},
+		{name: "reconciliation error", body: authoritativeBody, set: func(s *mockStore) { s.reconciliationErr = errStore }, want: 500},
+		{name: "reconciliation not ready", body: authoritativeBody, want: 409},
+		{name: "set mode error", body: shadowBody, set: func(s *mockStore) { s.setModeErr = errStore }, want: 500},
+		{name: "shadow success", body: shadowBody, want: 200},
+		{name: "authoritative success", body: authoritativeBody, set: func(s *mockStore) { s.reconciliation.Ready = true }, want: 200},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMockStore()
+			if test.set != nil {
+				test.set(store)
+			}
+			response := performAPIRequest(t, store, http.MethodPost, "/api/earnings/mode?office_id="+testOfficeID, test.body, validTestClaims())
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d, body = %s", response.Code, test.want, response.Body.String())
+			}
+			if test.name == "shadow success" && (store.lastMode != ModeShadow || store.lastModeReason != "incident rollback") {
+				t.Fatalf("mode=%q reason=%q", store.lastMode, store.lastModeReason)
+			}
+			if test.name == "authoritative success" && !strings.Contains(response.Body.String(), `"reconciliation"`) {
+				t.Fatalf("response missing reconciliation: %s", response.Body.String())
+			}
+		})
+	}
 }
 
 func TestCreateAdjustmentNegativePathsAndSuccess(t *testing.T) {
