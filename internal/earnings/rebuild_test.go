@@ -436,6 +436,65 @@ func TestProcessorTripVariantsAndValidation(t *testing.T) {
 	}
 }
 
+func TestEffectiveTripPayablesRepairsUnpaidRoundTripSnapshot(t *testing.T) {
+	trip := TripSource{
+		IsTwoWay: true, IsCommissionable: true, CommissionAmount: 27.11, AutoDistanceKM: 13.556,
+		FareCalculation: TripFareCalculation{TripDistanceKM: 13.556, CalculatedFare: 42.97},
+		Snapshot: &PayableSnapshot{
+			PayableDistanceKM: float(13.56), CommissionPayable: float(13.56), PetrolPayable: float(42.97),
+			PetrolCostPerLiter: float(95.08), StandardMileagePerLiter: float(30), CommissionRatePerKM: float(1),
+		},
+	}
+	commission, petrol := effectiveTripPayables(trip)
+	if commission == nil || *commission != 27.11 || petrol == nil || *petrol != 85.93 {
+		t.Fatalf("commission=%v petrol=%v", commission, petrol)
+	}
+}
+
+func TestEffectiveTripPayablesPreservesExplicitCommission(t *testing.T) {
+	trip := TripSource{
+		IsCommissionable: true, CommissionAmount: 19.75, AutoDistanceKM: 12,
+		Snapshot: &PayableSnapshot{CommissionPayable: float(12), PetrolPayable: float(8)},
+	}
+	commission, _ := effectiveTripPayables(trip)
+	if commission == nil || *commission != 19.75 {
+		t.Fatalf("explicit commission was lost: %v", commission)
+	}
+}
+
+func TestEffectiveTripPayablesProtectsPaidAndManualValues(t *testing.T) {
+	paid := TripSource{
+		IsTwoWay: true, IsCommissionable: true, AutoDistanceKM: 10,
+		Snapshot: &PayableSnapshot{CommissionPayable: float(9), PetrolPayable: float(8), IsPaid: true},
+	}
+	commission, petrol := effectiveTripPayables(paid)
+	if *commission != 9 || *petrol != 8 {
+		t.Fatalf("paid snapshot changed: commission=%v petrol=%v", *commission, *petrol)
+	}
+
+	manual := TripSource{
+		IsTwoWay: true, IsCommissionable: true, IsManualDistance: true, AutoDistanceKM: 10, ExtraKM: 5,
+		FareCalculation: TripFareCalculation{TripDistanceKM: 12, PetrolCostPerLiter: 100, StandardMileagePerLiter: 25},
+		Snapshot:        &PayableSnapshot{CommissionRatePerKM: float(1)},
+	}
+	commission, petrol = effectiveTripPayables(manual)
+	if *commission != 12 || *petrol != 48 {
+		t.Fatalf("manual distance was doubled: commission=%v petrol=%v", *commission, *petrol)
+	}
+}
+
+func TestEffectiveTripPayablesReconstructsIncompletePaidSnapshot(t *testing.T) {
+	trip := TripSource{
+		IsCommissionable: true, CommissionAmount: 16, AutoDistanceKM: 15.98,
+		FareCalculation: TripFareCalculation{PetrolCostPerLiter: 100, StandardMileagePerLiter: 40},
+		Snapshot:        &PayableSnapshot{IsPaid: true},
+	}
+	commission, petrol := effectiveTripPayables(trip)
+	if commission == nil || *commission != 16 || petrol == nil || *petrol != 39.95 {
+		t.Fatalf("incomplete paid snapshot was not reconstructed: commission=%v petrol=%v", commission, petrol)
+	}
+}
+
 func TestProcessorConflictsAndHelpers(t *testing.T) {
 	job := RebuildJob{OfficeID: primitive.NewObjectID(), RequestedBy: primitive.NewObjectID()}
 	entry := sourceEntry(job, primitive.NewObjectID(), primitive.NewObjectID(), "rider", "2026-07-01", ComponentPetrol, BucketPetrol, 123, false)

@@ -119,6 +119,8 @@ func evalTestExpr(t *testing.T, expr any, document map[string]any, variables map
 	t.Helper()
 
 	switch value := expr.(type) {
+	case bool:
+		return value
 	case int:
 		return float64(value)
 	case int32:

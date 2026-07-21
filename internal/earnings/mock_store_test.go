@@ -62,6 +62,8 @@ type mockStore struct {
 	setModeErr              error
 	lastMode                string
 	lastModeReason          string
+	reportDetail            ReportDetail
+	reportDetailErr         error
 }
 
 func newMockStore() *mockStore {
@@ -155,6 +157,9 @@ func (m *mockStore) SetMode(_ context.Context, officeID primitive.ObjectID, mode
 	}
 	m.modeState.OfficeID, m.modeState.Mode = officeID, mode
 	return m.modeState, m.modeChanged, nil
+}
+func (m *mockStore) LoadReportDetail(context.Context, primitive.ObjectID, primitive.ObjectID, string, string, string) (ReportDetail, error) {
+	return m.reportDetail, m.reportDetailErr
 }
 
 var errStore = errors.New("store failure")

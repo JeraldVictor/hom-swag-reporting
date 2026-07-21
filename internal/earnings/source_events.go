@@ -230,13 +230,14 @@ func (p *SourceEventProcessor) processTrip(ctx context.Context, event SourceEven
 	if !ok {
 		return permanentSourceEventError("trip has no payable worker")
 	}
+	commissionPayable, petrolPayable := effectiveTripPayables(trip)
 	items := []struct {
 		component Component
 		bucket    SettlementBucket
 		amount    *float64
 	}{
-		{ComponentTripCommission, BucketCommission, trip.Snapshot.CommissionPayable},
-		{ComponentPetrol, BucketPetrol, trip.Snapshot.PetrolPayable},
+		{ComponentTripCommission, BucketCommission, commissionPayable},
+		{ComponentPetrol, BucketPetrol, petrolPayable},
 	}
 	for _, item := range items {
 		if item.amount == nil || !validMoney(*item.amount) {

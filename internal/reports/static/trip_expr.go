@@ -23,7 +23,7 @@ func tripAllowanceWorkerIDExpr() bson.M {
 }
 
 func tripSnapshotOrLegacyExpr(field string, legacy any) bson.M {
-	return payables.SnapshotOrLegacyExpr(field, legacy)
+	return payables.PaidSnapshotOrCanonicalExpr(field, legacy)
 }
 
 func tripPayableDistanceExpr() bson.M {
@@ -31,25 +31,22 @@ func tripPayableDistanceExpr() bson.M {
 }
 
 func tripPetrolPayableExpr(distanceExpr any) bson.M {
-	petrolCost := bson.M{"$ifNull": bson.A{"$office.petrol_cost_per_liter", 0}}
-	mileage := bson.M{"$ifNull": bson.A{"$office.standard_mileage_per_liter", 0}}
+	petrolCost := bson.M{"$ifNull": bson.A{"$payable_snapshot.petrol_cost_per_liter", bson.M{"$ifNull": bson.A{"$office.petrol_cost_per_liter", 0}}}}
+	mileage := bson.M{"$ifNull": bson.A{"$payable_snapshot.standard_mileage_per_liter", bson.M{"$ifNull": bson.A{"$office.standard_mileage_per_liter", 0}}}}
 
-	return bson.M{"$ifNull": bson.A{
-		"$fare_calculation.calculated_fare",
-		bson.M{"$cond": bson.A{
-			bson.M{"$and": bson.A{
-				bson.M{"$gt": bson.A{petrolCost, 0}},
-				bson.M{"$gt": bson.A{mileage, 0}},
-			}},
-			bson.M{"$round": bson.A{
-				bson.M{"$multiply": bson.A{
-					bson.M{"$divide": bson.A{distanceExpr, mileage}},
-					petrolCost,
-				}},
-				2,
-			}},
-			0,
+	return bson.M{"$cond": bson.A{
+		bson.M{"$and": bson.A{
+			bson.M{"$gt": bson.A{petrolCost, 0}},
+			bson.M{"$gt": bson.A{mileage, 0}},
 		}},
+		bson.M{"$round": bson.A{
+			bson.M{"$multiply": bson.A{
+				bson.M{"$divide": bson.A{distanceExpr, mileage}},
+				petrolCost,
+			}},
+			2,
+		}},
+		bson.M{"$ifNull": bson.A{"$fare_calculation.calculated_fare", 0}},
 	}}
 }
 

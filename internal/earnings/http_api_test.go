@@ -32,6 +32,8 @@ func adjustmentBody(overrides ...string) string {
 	return body
 }
 
+type storeWithoutReportDetail struct{ Store }
+
 func TestAPIRoutingAndReadEndpoints(t *testing.T) {
 	t.Run("missing token", func(t *testing.T) {
 		response := performAPIRequest(t, newMockStore(), http.MethodGet, "/api/earnings/status?office_id="+testOfficeID, "", nil)
@@ -128,6 +130,47 @@ func TestAPIRoutingAndReadEndpoints(t *testing.T) {
 					t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 				}
 			})
+		}
+	})
+
+	t.Run("report detail validation and repository", func(t *testing.T) {
+		validQuery := "?office_id=" + testOfficeID + "&worker_id=" + testWorkerID + "&role=rider&start_date=2026-07-01&end_date=2026-07-31"
+		tests := []struct {
+			name, query string
+			store       Store
+			want        int
+			contains    string
+		}{
+			{name: "invalid worker", query: strings.Replace(validQuery, testWorkerID, "bad", 1), store: newMockStore(), want: 400},
+			{name: "invalid role", query: strings.Replace(validQuery, "role=rider", "role=staff", 1), store: newMockStore(), want: 400},
+			{name: "invalid dates", query: strings.Replace(validQuery, "2026-07-01", "bad", 1), store: newMockStore(), want: 400},
+			{name: "worker lookup error", query: validQuery, store: func() *mockStore { s := newMockStore(); s.workerErr = errStore; return s }(), want: 500},
+			{name: "worker outside office", query: validQuery, store: func() *mockStore { s := newMockStore(); s.workerExists = false; return s }(), want: 422},
+			{name: "detail store unavailable", query: validQuery, store: storeWithoutReportDetail{Store: newMockStore()}, want: 500},
+			{name: "repository error", query: validQuery, store: func() *mockStore { s := newMockStore(); s.reportDetailErr = errStore; return s }(), want: 500},
+			{name: "success", query: validQuery, store: func() *mockStore { s := newMockStore(); s.reportDetail = emptyReportDetail(); return s }(), want: 200, contains: `"trips":[]`},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				response := performAPIRequest(t, test.store, http.MethodGet, "/api/earnings/report-detail"+test.query, "", validTestClaims())
+				if response.Code != test.want || test.contains != "" && !strings.Contains(response.Body.String(), test.contains) {
+					t.Fatalf("status = %d, want %d, body = %s", response.Code, test.want, response.Body.String())
+				}
+			})
+		}
+	})
+
+	t.Run("empty restored database collections are arrays", func(t *testing.T) {
+		store := newMockStore()
+		query := "?office_id=" + testOfficeID + "&start_date=2026-07-01&end_date=2026-07-31"
+		ledger := performAPIRequest(t, store, http.MethodGet, "/api/earnings/ledger"+query, "", validTestClaims())
+		if ledger.Code != http.StatusOK || !strings.Contains(ledger.Body.String(), `"entries":[]`) {
+			t.Fatalf("ledger status = %d, body = %s", ledger.Code, ledger.Body.String())
+		}
+
+		settlements := performAPIRequest(t, store, http.MethodGet, "/api/earnings/settlements"+query, "", validTestClaims())
+		if settlements.Code != http.StatusOK || !strings.Contains(settlements.Body.String(), `"settlements":[]`) {
+			t.Fatalf("settlements status = %d, body = %s", settlements.Code, settlements.Body.String())
 		}
 	})
 

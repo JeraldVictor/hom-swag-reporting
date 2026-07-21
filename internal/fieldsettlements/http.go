@@ -64,6 +64,9 @@ func (a *API) Handler() http.Handler {
 			http.Error(w, "failed to list settlements", http.StatusInternalServerError)
 			return
 		}
+		if rows == nil {
+			rows = make([]earnings.Settlement, 0)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"settlements": rows, "total": total, "page": input.Page, "limit": input.Limit})
 	})

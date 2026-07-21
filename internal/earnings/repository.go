@@ -109,7 +109,7 @@ func (r *Repository) LoadReconciliationLedger(ctx context.Context, officeID prim
 		return nil, err
 	}
 	defer cursor.Close(ctx)
-	var entries []LedgerEntry
+	entries := make([]LedgerEntry, 0)
 	return entries, cursor.All(ctx, &entries)
 }
 
@@ -233,7 +233,7 @@ func (r *Repository) LoadRiderLeaderboardSources(ctx context.Context, officeID p
 	match := payables.TripBaseMatch(startDate, endDate)
 	match["office_id"] = officeID
 	workerExpr := payables.AllowanceWorkerIDExpr()
-	distanceExpr := payables.SnapshotOrLegacyExpr("payable_distance_km", payables.PayableDistanceExpr())
+	distanceExpr := payables.PaidSnapshotOrCanonicalExpr("payable_distance_km", payables.PayableDistanceExpr())
 	workerTypeExpr := bson.M{"$cond": bson.A{
 		bson.M{"$or": bson.A{bson.M{"$ne": bson.A{"$driver_beautician_id", nil}}, bson.M{"$and": bson.A{"$is_self_drive", bson.M{"$ne": bson.A{"$beautician_id", nil}}}}}},
 		"beautician", "rider",
@@ -277,7 +277,37 @@ func (r *Repository) PutSourceEntry(ctx context.Context, entry LedgerEntry) (Led
 	if err := result.Decode(&stored); err != nil {
 		return LedgerEntry{}, false, err
 	}
-	return stored, stored.ID == entry.ID, nil
+	created := stored.ID == entry.ID
+	if created || stored.Status != StatusOpen || stored.SettledAmountPaise != 0 || sameSourceEntry(stored, entry) {
+		return stored, created, nil
+	}
+
+	// Source entries are materialized projections, not manual ledger actions.
+	// Rebuilds may repair an unpaid projection after restored source data or a
+	// trip edit. Once any amount is settled, the row remains immutable and the
+	// caller reports a conflict so an explicit correction can be posted.
+	entry.ID = stored.ID
+	entry.CreatedAt = stored.CreatedAt
+	entry.CreatedBy = stored.CreatedBy
+	entry.UpdatedAt = now
+	update := bson.M{"$set": bson.M{
+		"worker_id": entry.WorkerID, "worker_type": entry.WorkerType, "service_date_key": entry.ServiceDateKey,
+		"component": entry.Component, "settlement_bucket": entry.SettlementBucket,
+		"amount_paise": entry.AmountPaise, "settled_amount_paise": entry.SettledAmountPaise, "status": entry.Status,
+		"source_type": entry.SourceType, "source_id": entry.SourceID,
+		"calculation_version": entry.CalculationVersion, "configuration_snapshot": entry.ConfigurationSnapshot,
+		"reason": entry.Reason, "updated_at": now,
+	}}
+	write, err := r.db.Collection(ledgerCollection).UpdateOne(ctx, bson.M{
+		"_id": stored.ID, "status": StatusOpen, "settled_amount_paise": int64(0),
+	}, update)
+	if err != nil {
+		return LedgerEntry{}, false, err
+	}
+	if write.MatchedCount == 0 {
+		return stored, false, nil
+	}
+	return entry, false, nil
 }
 
 func (r *Repository) FinishRebuild(ctx context.Context, id primitive.ObjectID, status string, stats RebuildStats, message string) error {
@@ -590,7 +620,7 @@ func (r *Repository) ListSettlements(ctx context.Context, input SettlementFilter
 		return nil, 0, err
 	}
 	defer cursor.Close(ctx)
-	var settlements []Settlement
+	settlements := make([]Settlement, 0)
 	if err := cursor.All(ctx, &settlements); err != nil {
 		return nil, 0, err
 	}

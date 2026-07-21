@@ -79,6 +79,8 @@ func (a *API) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		a.require(w, principal, "ledger.read", func() { a.getStatus(w, r, officeID) })
 	case r.Method == http.MethodGet && path == "/ledger":
 		a.require(w, principal, "ledger.read", func() { a.listLedger(w, r, officeID) })
+	case r.Method == http.MethodGet && path == "/report-detail":
+		a.require(w, principal, "ledger.read", func() { a.getReportDetail(w, r, officeID) })
 	case r.Method == http.MethodGet && path == "/summary":
 		a.require(w, principal, "ledger.read", func() { a.getSummary(w, r, officeID) })
 	case r.Method == http.MethodGet && path == "/reconciliation":
@@ -133,6 +135,9 @@ func (a *API) listSettlements(w http.ResponseWriter, r *http.Request, officeID s
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if settlements == nil {
+		settlements = make([]Settlement, 0)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"settlements": settlements, "total": total, "page": page, "limit": limit})
 }
@@ -401,6 +406,9 @@ func (a *API) listLedger(w http.ResponseWriter, r *http.Request, officeID string
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if entries == nil {
+		entries = make([]LedgerEntry, 0)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"entries": entries, "total": total, "page": page, "limit": limit})
 }

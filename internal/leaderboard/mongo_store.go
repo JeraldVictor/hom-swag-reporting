@@ -92,7 +92,7 @@ func (s *MongoStore) RiderScores(ctx context.Context, officeID primitive.ObjectI
 	match["office_id"], match["rider_id"] = officeID, bson.M{"$ne": nil}
 	cursor, err := s.db.Collection("trips").Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: match}},
-		{{Key: "$addFields", Value: bson.M{"payable_distance_km": payables.SnapshotOrLegacyExpr("payable_distance_km", payables.PayableDistanceExpr())}}},
+		{{Key: "$addFields", Value: bson.M{"payable_distance_km": payables.PaidSnapshotOrCanonicalExpr("payable_distance_km", payables.PayableDistanceExpr())}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": "$rider_id", "trip_count": bson.M{"$sum": 1},
 			"total_distance_km": bson.M{"$sum": "$payable_distance_km"},

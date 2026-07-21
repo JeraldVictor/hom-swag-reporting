@@ -306,6 +306,40 @@ func TestRepositoryLeaderboardPrizesAndSourceWrites(t *testing.T) {
 			t.Fatalf("stored=%v created=%v err=%v", stored, created, err)
 		}
 	})
+	mt.Run("repairs an open unsettled source", func(mt *mtest.T) {
+		worker := primitive.NewObjectID()
+		doc := bson.D{
+			{Key: "_id", Value: entryID}, {Key: "office_id", Value: office}, {Key: "worker_id", Value: worker},
+			{Key: "worker_type", Value: "rider"}, {Key: "service_date_key", Value: "2026-07-21"},
+			{Key: "component", Value: ComponentTripCommission}, {Key: "settlement_bucket", Value: BucketCommission},
+			{Key: "amount_paise", Value: int64(1356)}, {Key: "settled_amount_paise", Value: int64(0)},
+			{Key: "status", Value: StatusOpen}, {Key: "source_type", Value: "trips"},
+			{Key: "calculation_version", Value: 1}, {Key: "idempotency_key", Value: "source"},
+		}
+		mt.AddMockResponses(
+			findAndModifyResponse(doc),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}, bson.E{Key: "nModified", Value: 1}),
+		)
+		stored, created, err := NewRepository(mt.DB).PutSourceEntry(context.Background(), LedgerEntry{
+			OfficeID: office, WorkerID: worker, WorkerType: "rider", ServiceDateKey: "2026-07-21",
+			Component: ComponentTripCommission, SettlementBucket: BucketCommission, AmountPaise: 2711,
+			Status: StatusOpen, SourceType: "trips", CalculationVersion: 1, IdempotencyKey: "source",
+		})
+		if err != nil || created || stored.AmountPaise != 2711 || stored.ID != entryID {
+			t.Fatalf("stored=%+v created=%v err=%v", stored, created, err)
+		}
+	})
+	mt.Run("does not rewrite a settled source", func(mt *mtest.T) {
+		doc := bson.D{
+			{Key: "_id", Value: entryID}, {Key: "office_id", Value: office}, {Key: "idempotency_key", Value: "source"},
+			{Key: "amount_paise", Value: int64(1356)}, {Key: "settled_amount_paise", Value: int64(1356)}, {Key: "status", Value: StatusSettled},
+		}
+		mt.AddMockResponses(findAndModifyResponse(doc))
+		stored, created, err := NewRepository(mt.DB).PutSourceEntry(context.Background(), LedgerEntry{OfficeID: office, AmountPaise: 2711, IdempotencyKey: "source"})
+		if err != nil || created || stored.AmountPaise != 1356 || stored.Status != StatusSettled {
+			t.Fatalf("stored=%+v created=%v err=%v", stored, created, err)
+		}
+	})
 	mt.Run("source error", func(mt *mtest.T) {
 		mt.AddMockResponses(commandError())
 		if _, _, err := NewRepository(mt.DB).PutSourceEntry(context.Background(), LedgerEntry{OfficeID: office}); err == nil {

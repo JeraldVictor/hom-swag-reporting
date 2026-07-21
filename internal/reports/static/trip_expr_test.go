@@ -35,14 +35,14 @@ func TestTripPayableDistanceMatchesLegacyNodeFallback(t *testing.T) {
 		expected float64
 	}{
 		{
-			name: "uses fare calculation distance when available",
+			name: "repairs stale fare distance from canonical automatic distance",
 			document: map[string]any{
 				"fare_calculation": map[string]any{"trip_distance_km": 12.5},
 				"auto_distance_km": 9,
 				"extra_km":         3,
 				"is_two_way":       true,
 			},
-			expected: 12.5,
+			expected: 21,
 		},
 		{
 			name: "falls back to one way auto distance plus extra km",
@@ -122,6 +122,7 @@ func TestTripAllowanceWorkerAttributionPriority(t *testing.T) {
 func TestTripSnapshotZeroIsAuthoritative(t *testing.T) {
 	document := map[string]any{
 		"payable_snapshot": map[string]any{
+			"is_paid":             true,
 			"payable_distance_km": 0,
 			"petrol_payable":      0,
 			"commission_payable":  0,
@@ -141,12 +142,15 @@ func TestTripSnapshotFallsBackOnlyWhenMissingOrNull(t *testing.T) {
 	assertEvaluatedMoney(t, "null snapshot", tripSnapshotOrLegacyExpr("petrol_payable", 50), map[string]any{
 		"payable_snapshot": map[string]any{"petrol_payable": nil},
 	}, 50)
+	assertEvaluatedMoney(t, "paid snapshot missing field", tripSnapshotOrLegacyExpr("commission_payable", 25), map[string]any{
+		"payable_snapshot": map[string]any{"is_paid": true},
+	}, 25)
 }
 
 func TestTripPetrolPayableFallsBackToOfficeFareFormula(t *testing.T) {
 	distanceExpr := tripPayableDistanceExpr()
 
-	t.Run("uses fare calculation amount when available", func(t *testing.T) {
+	t.Run("recalculates from canonical distance when settings are available", func(t *testing.T) {
 		document := map[string]any{
 			"fare_calculation": map[string]any{
 				"trip_distance_km": 12,
@@ -158,7 +162,7 @@ func TestTripPetrolPayableFallsBackToOfficeFareFormula(t *testing.T) {
 			},
 		}
 
-		assertEvaluatedMoney(t, "petrol_payable", tripPetrolPayableExpr(distanceExpr), document, 77)
+		assertEvaluatedMoney(t, "petrol_payable", tripPetrolPayableExpr(distanceExpr), document, 24)
 	})
 
 	t.Run("calculates from payable distance and office petrol settings", func(t *testing.T) {

@@ -263,7 +263,7 @@ func TestGoldenTripFixturesCoverPetrolAndCommissionPayableInputs(t *testing.T) {
 		petrolPayable float64
 	}{
 		{
-			name: "fare calculation wins over auto distance and office fallback",
+			name: "automatic distance repairs a stale fare calculation",
 			document: map[string]any{
 				"fare_calculation": map[string]any{
 					"trip_distance_km": 18,
@@ -277,8 +277,8 @@ func TestGoldenTripFixturesCoverPetrolAndCommissionPayableInputs(t *testing.T) {
 					"standard_mileage_per_liter": 55,
 				},
 			},
-			distance:      18,
-			petrolPayable: 90,
+			distance:      24,
+			petrolPayable: 48,
 		},
 		{
 			name: "self drive style trip uses auto distance two way extra km and office fare",
@@ -308,6 +308,7 @@ func TestGoldenTripFixturesCoverPetrolAndCommissionPayableInputs(t *testing.T) {
 func TestGoldenTripSnapshotWinsOverLegacyPayableInputs(t *testing.T) {
 	document := map[string]any{
 		"payable_snapshot": map[string]any{
+			"is_paid":             true,
 			"payable_distance_km": 11,
 			"petrol_payable":      44,
 			"commission_payable":  33,

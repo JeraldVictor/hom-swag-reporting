@@ -41,10 +41,21 @@ type OrderSource struct {
 }
 
 type PayableSnapshot struct {
-	CommissionPayable *float64  `bson:"commission_payable"`
-	PetrolPayable     *float64  `bson:"petrol_payable"`
-	IsPaid            bool      `bson:"is_paid"`
-	CapturedAt        time.Time `bson:"captured_at"`
+	PayableDistanceKM       *float64  `bson:"payable_distance_km"`
+	CommissionPayable       *float64  `bson:"commission_payable"`
+	PetrolPayable           *float64  `bson:"petrol_payable"`
+	PetrolCostPerLiter      *float64  `bson:"petrol_cost_per_liter"`
+	StandardMileagePerLiter *float64  `bson:"standard_mileage_per_liter"`
+	CommissionRatePerKM     *float64  `bson:"rider_commission_rate_per_km"`
+	IsPaid                  bool      `bson:"is_paid"`
+	CapturedAt              time.Time `bson:"captured_at"`
+}
+
+type TripFareCalculation struct {
+	TripDistanceKM          float64 `bson:"trip_distance_km"`
+	CalculatedFare          float64 `bson:"calculated_fare"`
+	PetrolCostPerLiter      float64 `bson:"petrol_cost_per_liter"`
+	StandardMileagePerLiter float64 `bson:"standard_mileage_per_liter"`
 }
 
 type TripSource struct {
@@ -58,6 +69,13 @@ type TripSource struct {
 	Status             string              `bson:"status"`
 	KanbanState        string              `bson:"kanban_state"`
 	IsDeleted          bool                `bson:"is_deleted"`
+	IsTwoWay           bool                `bson:"is_two_way"`
+	IsCommissionable   bool                `bson:"is_commission_applicable"`
+	CommissionAmount   float64             `bson:"commission_amount"`
+	IsManualDistance   bool                `bson:"is_distance_manually_overridden"`
+	AutoDistanceKM     float64             `bson:"auto_distance_km"`
+	ExtraKM            float64             `bson:"extra_km"`
+	FareCalculation    TripFareCalculation `bson:"fare_calculation"`
 	Snapshot           *PayableSnapshot    `bson:"payable_snapshot"`
 }
 
@@ -412,14 +430,15 @@ func (p *Processor) processTrips(ctx context.Context, job RebuildJob, stats *Reb
 			stats.MissingSnapshots++
 			continue
 		}
+		commissionPayable, petrolPayable := effectiveTripPayables(trip)
 		items := []struct {
 			component Component
 			bucket    SettlementBucket
 			amount    *float64
 			enabled   bool
 		}{
-			{ComponentTripCommission, BucketCommission, trip.Snapshot.CommissionPayable, job.Scope != "petrol"},
-			{ComponentPetrol, BucketPetrol, trip.Snapshot.PetrolPayable, true},
+			{ComponentTripCommission, BucketCommission, commissionPayable, job.Scope != "petrol"},
+			{ComponentPetrol, BucketPetrol, petrolPayable, true},
 		}
 		for _, item := range items {
 			if !item.enabled {
@@ -440,6 +459,60 @@ func (p *Processor) processTrips(ctx context.Context, job RebuildJob, stats *Reb
 	}
 	return nil
 }
+
+func effectiveTripPayables(trip TripSource) (*float64, *float64) {
+	if trip.Snapshot == nil {
+		return nil, nil
+	}
+	// Settled snapshots are immutable. Corrections for paid earnings must use
+	// an auditable adjustment instead of rewriting the source entry.
+	if trip.Snapshot.IsPaid && trip.Snapshot.CommissionPayable != nil && trip.Snapshot.PetrolPayable != nil {
+		return trip.Snapshot.CommissionPayable, trip.Snapshot.PetrolPayable
+	}
+	distance := trip.FareCalculation.TripDistanceKM
+	if !trip.IsManualDistance && trip.AutoDistanceKM > 0 {
+		distance = trip.AutoDistanceKM + trip.ExtraKM
+		if trip.IsTwoWay {
+			distance = trip.AutoDistanceKM*2 + trip.ExtraKM
+		}
+	}
+	if distance <= 0 {
+		return trip.Snapshot.CommissionPayable, trip.Snapshot.PetrolPayable
+	}
+	rate := 1.0
+	if trip.Snapshot.CommissionRatePerKM != nil && *trip.Snapshot.CommissionRatePerKM > 0 {
+		rate = *trip.Snapshot.CommissionRatePerKM
+	}
+	commission := 0.0
+	if trip.IsCommissionable {
+		commission = roundSourceMoney(distance * rate)
+		if trip.CommissionAmount > 0 {
+			commission = roundSourceMoney(trip.CommissionAmount)
+		}
+	}
+	cost, mileage := trip.FareCalculation.PetrolCostPerLiter, trip.FareCalculation.StandardMileagePerLiter
+	if trip.Snapshot.PetrolCostPerLiter != nil && *trip.Snapshot.PetrolCostPerLiter > 0 {
+		cost = *trip.Snapshot.PetrolCostPerLiter
+	}
+	if trip.Snapshot.StandardMileagePerLiter != nil && *trip.Snapshot.StandardMileagePerLiter > 0 {
+		mileage = *trip.Snapshot.StandardMileagePerLiter
+	}
+	if cost <= 0 || mileage <= 0 {
+		return &commission, trip.Snapshot.PetrolPayable
+	}
+	petrol := roundSourceMoney(distance / mileage * cost)
+	if trip.Snapshot.IsPaid {
+		if trip.Snapshot.CommissionPayable != nil {
+			commission = *trip.Snapshot.CommissionPayable
+		}
+		if trip.Snapshot.PetrolPayable != nil {
+			petrol = *trip.Snapshot.PetrolPayable
+		}
+	}
+	return &commission, &petrol
+}
+
+func roundSourceMoney(value float64) float64 { return math.Round(value*100) / 100 }
 
 func (p *Processor) put(ctx context.Context, entry LedgerEntry, stats *RebuildStats) error {
 	return putLedgerEntry(ctx, p.backend, entry, stats)
