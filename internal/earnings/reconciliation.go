@@ -169,11 +169,12 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 			result.MissingSnapshots++
 			continue
 		}
+		commissionPayable, petrolPayable := effectiveTripPayables(trip)
 		for _, item := range []struct {
 			component Component
 			bucket    SettlementBucket
 			amount    *float64
-		}{{ComponentTripCommission, BucketCommission, trip.Snapshot.CommissionPayable}, {ComponentPetrol, BucketPetrol, trip.Snapshot.PetrolPayable}} {
+		}{{ComponentTripCommission, BucketCommission, commissionPayable}, {ComponentPetrol, BucketPetrol, petrolPayable}} {
 			if item.amount == nil || !validMoney(*item.amount) {
 				result.MissingSnapshots++
 				continue

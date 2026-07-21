@@ -102,6 +102,28 @@ func TestReconcilerReadyWhenCanonicalTotalsMatch(t *testing.T) {
 	}
 }
 
+func TestReconcilerUsesSameRoundTripRepairAsRebuild(t *testing.T) {
+	backend, office, _, _ := reconciliationFixture()
+	backend.ledger[5].AmountPaise = 4000
+	trip := &backend.trips[0]
+	trip.IsTwoWay = true
+	trip.IsCommissionable = true
+	trip.CommissionAmount = 27.11
+	trip.AutoDistanceKM = 13.556
+	trip.FareCalculation = TripFareCalculation{PetrolCostPerLiter: 95.08, StandardMileagePerLiter: 30}
+	trip.Snapshot.CommissionPayable = float(13.56)
+	trip.Snapshot.PetrolPayable = float(42.97)
+	trip.Snapshot.PetrolCostPerLiter = float(95.08)
+	trip.Snapshot.StandardMileagePerLiter = float(30)
+	backend.ledger[4].AmountPaise = 2711
+	backend.ledger[5].AmountPaise = 8593
+
+	result, err := NewReconciler(backend).Run(context.Background(), office, "2026-07-01", "2026-07-31")
+	if err != nil || !result.Ready || result.Mismatched != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestReconcilerKeepsBeauticianAndRiderBoardsIndependent(t *testing.T) {
 	backend, office, beautician, _ := reconciliationFixture()
 	backend.ledger[5].AmountPaise = 4000
