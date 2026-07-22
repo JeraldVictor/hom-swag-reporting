@@ -207,7 +207,13 @@ func (r dailySalesRow) values() []interface{} {
 	totalValue := money2(r.TotalServicesCost + r.ConvenienceFees + r.HygieneFees + r.SurgeCharges + r.MembershipCharges + cancellationCharges)
 	couponDiscount := money2(math.Max(r.DiscountTotal-r.MembershipDiscount-r.SpecialDiscount, 0))
 	totalDiscount := money2(r.MembershipDiscount + r.SpecialDiscount + couponDiscount)
+	calculatedBaseReceivable := money2(math.Max(totalValue-totalDiscount, 0))
 	netReceivable := money2(math.Max(r.Total-r.Tips, 0))
+	if math.Abs(r.Total-calculatedBaseReceivable) <= 0.01 {
+		// Some orders store the service receivable in total and persist the tip
+		// separately. Do not subtract that separate tip a second time.
+		netReceivable = money2(r.Total)
+	}
 	if isCancelledDailySalesStatus(r.Status) {
 		netReceivable = cancellationCharges
 	}

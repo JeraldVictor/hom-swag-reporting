@@ -167,6 +167,7 @@ func detectOrderIssues(source orderIssueSource, now time.Time) []OrderReconcilia
 			"Order total does not match either supported charge model (tip included or tip stored separately).", now,
 			map[string]interface{}{"calculated_base_paise": base, "tip_paise": tip, "stored_total_paise": total})}
 	}
+	actual = orderIssueReceivedPaiseForExpected(source, expected)
 
 	difference := actual - expected
 	if difference == 0 {
@@ -212,30 +213,52 @@ func effectiveOrderIssueTip(source orderIssueSource) float64 {
 }
 
 func orderIssueReceivedPaise(source orderIssueSource) int64 {
+	received, _ := orderIssueReceivedCandidates(source)
+	return received
+}
+
+func orderIssueReceivedPaiseForExpected(source orderIssueSource, expected int64) int64 {
+	received, separateTips := orderIssueReceivedCandidates(source)
+	withSeparateTips := received + separateTips
+	if separateTips > 0 && absPaise(withSeparateTips-expected) < absPaise(received-expected) {
+		return withSeparateTips
+	}
+	return received
+}
+
+func orderIssueReceivedCandidates(source orderIssueSource) (int64, int64) {
 	if len(source.Payment.History) > 0 {
-		var total int64
+		var received int64
+		var separateTips int64
 		for _, entry := range source.Payment.History {
 			label := normalizeOrderPaymentText(entry.Label)
+			method := normalizeOrderPaymentText(entry.Method)
+			amount := moneyToPaise(entry.Amount)
+			if label == "tip" || method == "tip" || method == "tips" {
+				if amount > 0 {
+					separateTips += amount
+				}
+				continue
+			}
 			if strings.Contains(label, "refund") || strings.Contains(label, "cancellation_fee") || strings.Contains(label, "cancellation_charge") {
 				continue
 			}
-			amount := moneyToPaise(entry.Amount)
 			if amount > 0 || label == "reconciliation_adjustment" {
-				total += amount
+				received += amount
 			}
 		}
-		return total
+		return received, separateTips
 	}
 	paid := firstOrderIssueMoney(source.Payment.ActualPaidAmount, source.Payment.AmountPaid)
 	if paid > 0 {
-		return moneyToPaise(paid)
+		return moneyToPaise(paid), 0
 	}
 	cod := pointerMoney(source.Payment.CODAmount)
 	if source.Payment.CODAmount == nil {
 		cod = source.CODCollectedAmount
 	}
 	return moneyToPaise(cod + pointerMoney(source.Payment.UPIAmount) + pointerMoney(source.Payment.OnlineAmount) +
-		pointerMoney(source.Payment.BankTransferAmount))
+		pointerMoney(source.Payment.BankTransferAmount)), 0
 }
 
 func normalizeOrderPaymentText(value string) string {

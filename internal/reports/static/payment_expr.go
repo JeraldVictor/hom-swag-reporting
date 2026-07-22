@@ -206,6 +206,7 @@ func paymentHistoryCountablePaymentCond() bson.M {
 			}},
 		}},
 		bson.M{"$ne": bson.A{paymentHistoryLabelExpr(), "tip"}},
+		bson.M{"$not": bson.A{bson.M{"$in": bson.A{paymentHistoryMethodExpr(), bson.A{"tip", "tips"}}}}},
 		bson.M{"$not": bson.A{paymentHistoryLabelMatchesExpr("refund")}},
 		bson.M{"$not": bson.A{paymentHistoryLabelMatchesExpr("cancellation_(fee|charge)")}},
 	}}

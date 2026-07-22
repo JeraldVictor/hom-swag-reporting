@@ -154,6 +154,19 @@ func TestGoldenPaymentFixturesCoverHistoryAndLegacyBuckets(t *testing.T) {
 			refund: 75,
 		},
 		{
+			name: "history excludes legacy tip methods even when the label is generic",
+			document: map[string]any{
+				"payment": map[string]any{
+					"history": []any{
+						map[string]any{"label": "Online payment", "method": "online", "amount": 2000},
+						map[string]any{"label": "Legacy payment transaction", "method": "tips", "amount": 29},
+					},
+				},
+			},
+			online: 2000,
+			total:  2000,
+		},
+		{
 			name: "legacy split payment places paid remainder in declared method",
 			document: map[string]any{
 				"payment": map[string]any{

@@ -27,7 +27,13 @@ func TestDetectOrderIssuesSupportsBothTipModels(t *testing.T) {
 				orderIssuePaymentHistory{Label: "Payment", Method: "online", Amount: 1100}),
 		},
 		{
-			name: "tip stored separately",
+			name: "separate tip is already included in main payment",
+			source: orderIssueFixture(1000, 100,
+				orderIssuePaymentHistory{Label: "Payment", Method: "online", Amount: 1100},
+				orderIssuePaymentHistory{Label: "Tip", Method: "cash", Amount: 100}),
+		},
+		{
+			name: "tip is collected as a separate payment",
 			source: orderIssueFixture(1000, 100,
 				orderIssuePaymentHistory{Label: "Payment", Method: "online", Amount: 1000},
 				orderIssuePaymentHistory{Label: "Tip", Method: "cash", Amount: 100}),
@@ -38,6 +44,23 @@ func TestDetectOrderIssuesSupportsBothTipModels(t *testing.T) {
 				t.Fatalf("issues = %#v, want none", issues)
 			}
 		})
+	}
+}
+
+func TestOrderIssueReceivedDoesNotDoubleCountTipBreakdowns(t *testing.T) {
+	source := orderIssueFixture(1971, 29,
+		orderIssuePaymentHistory{Label: "Online payment", Method: "online", Amount: 2000},
+		orderIssuePaymentHistory{Label: "Tip", Method: "online", Amount: 29},
+		orderIssuePaymentHistory{Label: "Legacy payment transaction", Method: "tips", Amount: 10},
+	)
+	source.Subtotal = 1797
+	source.ConvenienceFees = 115
+	source.HygieneFees = 59
+	if got := orderIssueReceivedPaise(source); got != 200000 {
+		t.Fatalf("received = %d, want 200000", got)
+	}
+	if issues := detectOrderIssues(source, time.Now().UTC()); len(issues) != 0 {
+		t.Fatalf("issues = %#v, want none", issues)
 	}
 }
 

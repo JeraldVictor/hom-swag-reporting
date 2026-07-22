@@ -39,10 +39,30 @@ func TestDailySalesRowValuesCalculatesCustomerFriendlyTotals(t *testing.T) {
 	assertFloatCell(t, values, 15, 1250)
 	assertFloatCell(t, values, 18, 50)
 	assertFloatCell(t, values, 19, 200)
-	assertFloatCell(t, values, 20, 970)
-	assertFloatCell(t, values, 22, 1050)
+	assertFloatCell(t, values, 20, 1050)
+	assertFloatCell(t, values, 22, 1130)
 	assertFloatCell(t, values, 29, 730)
 	assertFloatCell(t, values, 30, 75)
+}
+
+func TestDailySalesRowValuesDoesNotSubtractSeparateTipTwice(t *testing.T) {
+	row := dailySalesRow{
+		Status:            "completed",
+		TotalServicesCost: 1797,
+		ConvenienceFees:   115,
+		HygieneFees:       59,
+		Total:             1971,
+		Tips:              29,
+		Online:            2000,
+		TotalReceived:     2000,
+	}
+
+	values := row.values()
+
+	assertFloatCell(t, values, 20, 1971)
+	assertFloatCell(t, values, 21, 29)
+	assertFloatCell(t, values, 22, 2000)
+	assertFloatCell(t, values, 26, 2000)
 }
 
 func TestDailySalesRowValuesUsesCancellationChargeForCancelledOrders(t *testing.T) {
