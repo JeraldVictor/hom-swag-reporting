@@ -354,7 +354,13 @@ func main() {
 
 	// Earnings mode is persisted per office. The environment value is only the
 	// fallback for offices that have never been explicitly configured.
-	earningsRepository := earnings.NewRepositoryWithMode(mongoClient.Database, cfg.EarningsMode)
+	earningsRepository := earnings.NewRepositoryWithOptions(mongoClient.Database, earnings.RepositoryOptions{
+		DefaultMode:                 cfg.EarningsMode,
+		AllowNonTransactionalWrites: cfg.AllowNonTransactionalWrites,
+	})
+	if cfg.AllowNonTransactionalWrites {
+		log.Printf("WARNING: EARNINGS_ALLOW_NON_TRANSACTIONAL_WRITES is enabled; earnings writes are not transactionally atomic")
+	}
 	indexCtx, cancelIndexes := context.WithTimeout(ctx, 10*time.Second)
 	if err := earningsRepository.EnsureIndexes(indexCtx); err != nil {
 		cancelIndexes()

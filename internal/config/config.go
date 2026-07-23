@@ -36,6 +36,7 @@ type Config struct {
 	OTELServiceName             string
 	JWTSecret                   string
 	EarningsMode                string
+	AllowNonTransactionalWrites bool
 }
 
 func Load() *Config {
@@ -64,6 +65,7 @@ func Load() *Config {
 		OTELServiceName:             getEnv("OTEL_REPORTING_SERVICE_NAME", "reporting-service"),
 		JWTSecret:                   getJWTSecret(),
 		EarningsMode:                getEnv("EARNINGS_MODE", "shadow"),
+		AllowNonTransactionalWrites: getEnvBool("EARNINGS_ALLOW_NON_TRANSACTIONAL_WRITES", false),
 	}
 }
 

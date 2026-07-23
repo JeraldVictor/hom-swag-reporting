@@ -80,6 +80,9 @@ Environment:
 
 - `EARNINGS_MODE=shadow` is the safe default for offices without persisted mode
   configuration.
+- `EARNINGS_ALLOW_NON_TRANSACTIONAL_WRITES=false` must remain disabled in
+  production. Local developers using a standalone MongoDB may explicitly set
+  it to `true`; replica-set deployments continue to use atomic transactions.
 - `EARNINGS_MODE=authoritative` may be used as an initial deployment fallback,
   but office-specific mode changes should be performed through the authenticated
   admin cutover control. Rider commission, beautician commission, and petrol

@@ -39,3 +39,15 @@ func TestGetJWTSecret(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadNonTransactionalWritesDefaultsOffAndRequiresExplicitOptIn(t *testing.T) {
+	t.Setenv("EARNINGS_ALLOW_NON_TRANSACTIONAL_WRITES", "")
+	if Load().AllowNonTransactionalWrites {
+		t.Fatal("non-transactional writes must default to disabled")
+	}
+
+	t.Setenv("EARNINGS_ALLOW_NON_TRANSACTIONAL_WRITES", "true")
+	if !Load().AllowNonTransactionalWrites {
+		t.Fatal("expected explicit local opt-in to enable non-transactional writes")
+	}
+}
