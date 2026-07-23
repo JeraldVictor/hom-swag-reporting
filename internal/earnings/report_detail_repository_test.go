@@ -27,6 +27,14 @@ func TestReportDateBoundsAndFallbackReason(t *testing.T) {
 	if got := firstNonEmpty("", " "); got != "Adjustment" {
 		t.Fatalf("fallback=%q", got)
 	}
+	payouts := []ReportPayout{
+		{PeriodStart: "2026-06-29", PeriodEnd: "2026-07-05", Amount: 100},
+		{PeriodStart: "2026-07-13", PeriodEnd: "2026-07-19", Amount: 200},
+	}
+	covered := reportPayoutsCoveringPeriod(payouts, "2026-07-13", "2026-07-19")
+	if len(covered) != 1 || covered[0].Amount != 200 {
+		t.Fatalf("covered payouts=%+v", covered)
+	}
 }
 
 func TestRepositoryReportRows(t *testing.T) {
@@ -162,7 +170,7 @@ func TestRepositoryLoadReportDetail(t *testing.T) {
 	mt.Run("rider success", func(mt *mtest.T) {
 		mt.AddMockResponses(empty(mt, "trips"), countResponse(mt.DB.Name()+"."+settlementCollection, 0), empty(mt, settlementCollection), empty(mt, "payouts"), countResponse(mt.DB.Name()+"."+ledgerCollection, 0), empty(mt, ledgerCollection), empty(mt, "commissionadjustments"))
 		detail, err := NewRepository(mt.DB).LoadReportDetail(context.Background(), officeID, workerID, "rider", "2026-07-01", "2026-07-31")
-		if err != nil || detail.Trips == nil || detail.Orders == nil || detail.Payouts == nil || detail.Adjustments == nil {
+		if err != nil || detail.Trips == nil || detail.Orders == nil || detail.Payouts == nil || detail.CoveredPayouts == nil || detail.Adjustments == nil {
 			mt.Fatalf("detail=%+v err=%v", detail, err)
 		}
 	})

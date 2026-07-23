@@ -291,6 +291,7 @@ type settlementRequest struct {
 	Reference      string           `json:"reference"`
 	Remarks        string           `json:"remarks"`
 	IdempotencyKey string           `json:"idempotency_key"`
+	EntryIDs       []string         `json:"entry_ids,omitempty"`
 }
 
 type settlementUpdateRequest struct {
@@ -350,6 +351,26 @@ func (a *API) createSettlement(w http.ResponseWriter, r *http.Request, principal
 		writeError(w, http.StatusBadRequest, errors.New("idempotency_key and reference must be at most 200 characters; remarks at most 500"))
 		return
 	}
+	if len(input.EntryIDs) > 10000 {
+		writeError(w, http.StatusBadRequest, errors.New("entry_ids must contain at most 10000 items"))
+		return
+	}
+	requestedEntryIDs := make([]primitive.ObjectID, 0, len(input.EntryIDs))
+	seenEntryIDs := make(map[primitive.ObjectID]struct{}, len(input.EntryIDs))
+	for _, rawEntryID := range input.EntryIDs {
+		entryID := strings.TrimSpace(rawEntryID)
+		if err := validateObjectID("entry_id", entryID); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		objectID := mustObjectID(entryID)
+		if _, exists := seenEntryIDs[objectID]; exists {
+			writeError(w, http.StatusBadRequest, errors.New("entry_ids must not contain duplicates"))
+			return
+		}
+		seenEntryIDs[objectID] = struct{}{}
+		requestedEntryIDs = append(requestedEntryIDs, objectID)
+	}
 	if !a.requireActiveStaff(w, r, principal.StaffID) || !a.requireExistingOffice(w, r, officeID) {
 		return
 	}
@@ -395,9 +416,10 @@ func (a *API) createSettlement(w http.ResponseWriter, r *http.Request, principal
 		StartDate: input.StartDate, EndDate: input.EndDate, AmountPaise: input.AmountPaise,
 		PaymentMethod: input.PaymentMethod, Reference: input.Reference, Remarks: input.Remarks,
 		IdempotencyKey: input.IdempotencyKey, CreatedBy: mustObjectID(principal.StaffID),
+		RequestedEntryIDs: requestedEntryIDs,
 	})
 	if err != nil {
-		if errors.Is(err, ErrNoPendingEarnings) || errors.Is(err, ErrSettlementExceedsPending) {
+		if errors.Is(err, ErrNoPendingEarnings) || errors.Is(err, ErrSettlementExceedsPending) || errors.Is(err, ErrSettlementEntriesUnavailable) {
 			writeError(w, http.StatusConflict, err)
 			return
 		}

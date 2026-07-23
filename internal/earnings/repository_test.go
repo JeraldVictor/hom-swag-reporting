@@ -428,6 +428,21 @@ func TestRepositoryAllocateSettlement(t *testing.T) {
 			t.Fatalf("stored=%v created=%t err=%v", stored, created, err)
 		}
 	})
+	mt.Run("selected entry unavailable", func(mt *mtest.T) {
+		settlementNS := mt.DB.Name() + "." + settlementCollection
+		ledgerNS := mt.DB.Name() + "." + ledgerCollection
+		selected := input
+		selected.RequestedEntryIDs = []primitive.ObjectID{entryID, primitive.NewObjectID()}
+		entry := bson.D{{Key: "_id", Value: entryID}, {Key: "office_id", Value: officeID}, {Key: "worker_id", Value: workerID}, {Key: "worker_type", Value: "beautician"}, {Key: "settlement_bucket", Value: BucketCommission}, {Key: "amount_paise", Value: int64(1000)}, {Key: "settled_amount_paise", Value: int64(0)}, {Key: "status", Value: StatusOpen}}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, settlementNS, mtest.FirstBatch),
+			mtest.CreateCursorResponse(0, ledgerNS, mtest.FirstBatch, entry),
+			commandOK(),
+		)
+		if _, _, err := NewRepository(mt.DB).AllocateSettlement(context.Background(), selected); !errors.Is(err, ErrSettlementEntriesUnavailable) {
+			t.Fatalf("error=%v", err)
+		}
+	})
 }
 
 func TestRepositoryAllocateSettlementFailures(t *testing.T) {

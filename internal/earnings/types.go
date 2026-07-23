@@ -142,24 +142,25 @@ type SettlementRevision struct {
 }
 
 type Settlement struct {
-	ID              primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
-	OfficeID        primitive.ObjectID     `bson:"office_id" json:"office_id"`
-	WorkerID        primitive.ObjectID     `bson:"worker_id" json:"worker_id"`
-	WorkerType      string                 `bson:"worker_type" json:"worker_type"`
-	Bucket          SettlementBucket       `bson:"bucket" json:"bucket"`
-	StartDate       string                 `bson:"start_date" json:"start_date"`
-	EndDate         string                 `bson:"end_date" json:"end_date"`
-	AmountPaise     int64                  `bson:"amount_paise" json:"amount_paise"`
-	PaymentMethod   string                 `bson:"payment_method" json:"payment_method"`
-	Reference       string                 `bson:"reference,omitempty" json:"reference,omitempty"`
-	Remarks         string                 `bson:"remarks,omitempty" json:"remarks,omitempty"`
-	IdempotencyKey  string                 `bson:"idempotency_key" json:"idempotency_key"`
-	Allocations     []SettlementAllocation `bson:"allocations" json:"allocations"`
-	CreatedBy       primitive.ObjectID     `bson:"created_by" json:"created_by"`
-	CreatedAt       time.Time              `bson:"created_at" json:"created_at"`
-	UpdatedBy       primitive.ObjectID     `bson:"updated_by,omitempty" json:"updated_by,omitempty"`
-	UpdatedAt       time.Time              `bson:"updated_at,omitempty" json:"updated_at,omitempty"`
-	RevisionHistory []SettlementRevision   `bson:"revision_history,omitempty" json:"revision_history,omitempty"`
+	ID                primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
+	OfficeID          primitive.ObjectID     `bson:"office_id" json:"office_id"`
+	WorkerID          primitive.ObjectID     `bson:"worker_id" json:"worker_id"`
+	WorkerType        string                 `bson:"worker_type" json:"worker_type"`
+	Bucket            SettlementBucket       `bson:"bucket" json:"bucket"`
+	StartDate         string                 `bson:"start_date" json:"start_date"`
+	EndDate           string                 `bson:"end_date" json:"end_date"`
+	AmountPaise       int64                  `bson:"amount_paise" json:"amount_paise"`
+	PaymentMethod     string                 `bson:"payment_method" json:"payment_method"`
+	Reference         string                 `bson:"reference,omitempty" json:"reference,omitempty"`
+	Remarks           string                 `bson:"remarks,omitempty" json:"remarks,omitempty"`
+	IdempotencyKey    string                 `bson:"idempotency_key" json:"idempotency_key"`
+	Allocations       []SettlementAllocation `bson:"allocations" json:"allocations"`
+	CreatedBy         primitive.ObjectID     `bson:"created_by" json:"created_by"`
+	CreatedAt         time.Time              `bson:"created_at" json:"created_at"`
+	UpdatedBy         primitive.ObjectID     `bson:"updated_by,omitempty" json:"updated_by,omitempty"`
+	UpdatedAt         time.Time              `bson:"updated_at,omitempty" json:"updated_at,omitempty"`
+	RevisionHistory   []SettlementRevision   `bson:"revision_history,omitempty" json:"revision_history,omitempty"`
+	RequestedEntryIDs []primitive.ObjectID   `bson:"-" json:"-"`
 }
 
 type SettlementUpdate struct {

@@ -22,9 +22,10 @@ const (
 )
 
 var (
-	ErrSettlementExceedsPending = errors.New("settlement amount exceeds the worker's pending earnings for this range")
-	ErrNoPendingEarnings        = errors.New("no pending earnings exist for this worker, bucket, and range")
-	ErrSettlementNotFound       = errors.New("settlement not found")
+	ErrSettlementExceedsPending     = errors.New("settlement amount exceeds the worker's pending earnings for this range")
+	ErrNoPendingEarnings            = errors.New("no pending earnings exist for this worker, bucket, and range")
+	ErrSettlementEntriesUnavailable = errors.New("one or more selected earnings are already paid or unavailable")
+	ErrSettlementNotFound           = errors.New("settlement not found")
 )
 
 type Repository struct {
@@ -580,6 +581,9 @@ func (r *Repository) AllocateSettlement(ctx context.Context, settlement Settleme
 			"service_date_key": bson.M{"$gte": settlement.StartDate, "$lte": settlement.EndDate},
 			"status":           bson.M{"$in": bson.A{StatusOpen, StatusPartiallySettled}},
 		}
+		if len(settlement.RequestedEntryIDs) > 0 {
+			filter["_id"] = bson.M{"$in": settlement.RequestedEntryIDs}
+		}
 		cursor, err := r.db.Collection(ledgerCollection).Find(tx, filter, options.Find().SetSort(
 			bson.D{{Key: "amount_paise", Value: 1}, {Key: "service_date_key", Value: 1}, {Key: "created_at", Value: 1}},
 		))
@@ -592,6 +596,9 @@ func (r *Repository) AllocateSettlement(ctx context.Context, settlement Settleme
 			return nil, err
 		}
 		_ = cursor.Close(tx)
+		if len(settlement.RequestedEntryIDs) > 0 && len(entries) != len(settlement.RequestedEntryIDs) {
+			return nil, ErrSettlementEntriesUnavailable
+		}
 		allocations, err := buildAllocations(entries, settlement.AmountPaise)
 		if err != nil {
 			return nil, err

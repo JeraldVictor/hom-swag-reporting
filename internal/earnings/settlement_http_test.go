@@ -30,6 +30,8 @@ func TestCreateSettlementValidationAndGuards(t *testing.T) {
 		{name: "nonpositive amount", body: settlementBody(`{"worker_id":"` + testWorkerID + `","worker_type":"rider","bucket":"petrol","start_date":"2026-07-01","end_date":"2026-07-31","amount_paise":0,"payment_method":"cash","idempotency_key":"x"}`), want: 400},
 		{name: "bad method", body: settlementBody(`{"worker_id":"` + testWorkerID + `","worker_type":"rider","bucket":"petrol","start_date":"2026-07-01","end_date":"2026-07-31","amount_paise":1,"payment_method":"card","idempotency_key":"x"}`), want: 400},
 		{name: "missing key", body: settlementBody(`{"worker_id":"` + testWorkerID + `","worker_type":"rider","bucket":"petrol","start_date":"2026-07-01","end_date":"2026-07-31","amount_paise":1,"payment_method":"upi","idempotency_key":" "}`), want: 400},
+		{name: "bad selected entry", body: settlementBody(`{"worker_id":"` + testWorkerID + `","worker_type":"rider","bucket":"petrol","start_date":"2026-07-01","end_date":"2026-07-31","amount_paise":1,"payment_method":"upi","idempotency_key":"x","entry_ids":["bad"]}`), want: 400},
+		{name: "duplicate selected entry", body: settlementBody(`{"worker_id":"` + testWorkerID + `","worker_type":"rider","bucket":"petrol","start_date":"2026-07-01","end_date":"2026-07-31","amount_paise":1,"payment_method":"upi","idempotency_key":"x","entry_ids":["` + testWorkerID + `","` + testWorkerID + `"]}`), want: 400},
 		{name: "long fields", body: settlementBody(`{"worker_id":"` + testWorkerID + `","worker_type":"rider","bucket":"petrol","start_date":"2026-07-01","end_date":"2026-07-31","amount_paise":1,"payment_method":"other","idempotency_key":"x","remarks":"` + strings.Repeat("r", 501) + `"}`), want: 400},
 		{name: "staff error", body: settlementBody(), set: func(s *mockStore) { s.activeStaffErr = errStore }, want: 500},
 		{name: "inactive staff", body: settlementBody(), set: func(s *mockStore) { s.activeStaff = false }, want: 403},
@@ -70,6 +72,19 @@ func TestCreateSettlementValidationAndGuards(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCreateSettlementPassesSelectedEntries(t *testing.T) {
+	entryID := primitive.NewObjectID()
+	body := `{"worker_id":"` + testWorkerID + `","worker_type":"rider","bucket":"petrol","start_date":"2026-07-01","end_date":"2026-07-31","amount_paise":1234,"payment_method":"upi","reference":"","remarks":"","idempotency_key":"selected-trips","entry_ids":["` + entryID.Hex() + `"]}`
+	store := newMockStore()
+	response := performAPIRequest(t, store, http.MethodPost, "/api/earnings/settlements?office_id="+testOfficeID, body, validTestClaims())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.lastSettlement.RequestedEntryIDs) != 1 || store.lastSettlement.RequestedEntryIDs[0] != entryID {
+		t.Fatalf("requested entries=%v", store.lastSettlement.RequestedEntryIDs)
 	}
 }
 

@@ -20,10 +20,11 @@ type ReportDetailStore interface {
 }
 
 type ReportDetail struct {
-	Orders      []ReportOrder      `json:"orders"`
-	Trips       []ReportTrip       `json:"trips"`
-	Payouts     []ReportPayout     `json:"payouts"`
-	Adjustments []ReportAdjustment `json:"adjustments"`
+	Orders         []ReportOrder      `json:"orders"`
+	Trips          []ReportTrip       `json:"trips"`
+	Payouts        []ReportPayout     `json:"payouts"`
+	CoveredPayouts []ReportPayout     `json:"covered_payouts"`
+	Adjustments    []ReportAdjustment `json:"adjustments"`
 }
 
 type ReportOrder struct {
@@ -52,6 +53,10 @@ type ReportTrip struct {
 	PayableDistanceKM      float64                `bson:"payable_distance_km" json:"payable_distance_km"`
 	CommissionPayable      float64                `bson:"commission_payable" json:"commission_payable"`
 	PetrolPayable          float64                `bson:"petrol_payable" json:"petrol_payable"`
+	PetrolPaidAmount       float64                `bson:"petrol_paid_amount" json:"petrol_paid_amount"`
+	PetrolPendingAmount    float64                `bson:"petrol_pending_amount" json:"petrol_pending_amount"`
+	PetrolPaymentStatus    string                 `bson:"petrol_payment_status" json:"petrol_payment_status"`
+	PetrolLedgerEntryIDs   []primitive.ObjectID   `bson:"petrol_ledger_entry_ids" json:"petrol_ledger_entry_ids"`
 	PayableSnapshot        map[string]interface{} `bson:"payable_snapshot,omitempty" json:"payable_snapshot,omitempty"`
 	FareCalculation        map[string]interface{} `bson:"fare_calculation,omitempty" json:"fare_calculation,omitempty"`
 }
@@ -121,7 +126,8 @@ func (a *API) getReportDetail(w http.ResponseWriter, r *http.Request, officeID s
 func emptyReportDetail() ReportDetail {
 	return ReportDetail{
 		Orders: make([]ReportOrder, 0), Trips: make([]ReportTrip, 0),
-		Payouts: make([]ReportPayout, 0), Adjustments: make([]ReportAdjustment, 0),
+		Payouts: make([]ReportPayout, 0), CoveredPayouts: make([]ReportPayout, 0),
+		Adjustments: make([]ReportAdjustment, 0),
 	}
 }
 
@@ -139,6 +145,7 @@ func (r *Repository) LoadReportDetail(ctx context.Context, officeID, workerID pr
 	if detail.Payouts, err = r.loadReportPayouts(ctx, officeID, workerID, startDate, endDate); err != nil {
 		return detail, err
 	}
+	detail.CoveredPayouts = reportPayoutsCoveringPeriod(detail.Payouts, startDate, endDate)
 	if detail.Adjustments, err = r.loadReportAdjustments(ctx, officeID, workerID, startDate, endDate); err != nil {
 		return detail, err
 	}
@@ -169,12 +176,61 @@ func (r *Repository) loadReportTrips(ctx context.Context, officeID, workerID pri
 		{{Key: "$match", Value: match}},
 		{{Key: "$addFields", Value: bson.M{"allowance_worker_id": payables.AllowanceWorkerIDExpr()}}},
 		{{Key: "$match", Value: bson.M{"allowance_worker_id": workerID}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from": ledgerCollection,
+			"let":  bson.M{"trip_id": "$_id"},
+			"pipeline": mongo.Pipeline{
+				{{Key: "$match", Value: bson.M{"$expr": bson.M{"$and": bson.A{
+					bson.M{"$eq": bson.A{"$office_id", officeID}},
+					bson.M{"$eq": bson.A{"$worker_id", workerID}},
+					bson.M{"$eq": bson.A{"$source_type", "trips"}},
+					bson.M{"$eq": bson.A{"$source_id", "$$trip_id"}},
+					bson.M{"$eq": bson.A{"$component", ComponentPetrol}},
+					bson.M{"$eq": bson.A{"$settlement_bucket", BucketPetrol}},
+					bson.M{"$ne": bson.A{"$status", StatusVoid}},
+				}}}}},
+				{{Key: "$project", Value: bson.M{
+					"_id": 1, "amount_paise": 1, "settled_amount_paise": 1,
+				}}},
+			},
+			"as": "petrol_ledger_entries",
+		}}},
 		{{Key: "$project", Value: bson.M{
 			"_id": 1, "trip_number": 1, "service_date": "$date", "is_two_way": 1, "is_commission_applicable": 1,
-			"payable_distance_km": payables.PaidSnapshotOrCanonicalExpr("payable_distance_km", distance),
-			"commission_payable":  payables.PaidSnapshotOrCanonicalExpr("commission_payable", commission),
-			"petrol_payable":      payables.PaidSnapshotOrCanonicalExpr("petrol_payable", petrol),
-			"payable_snapshot":    1, "fare_calculation": 1,
+			"payable_distance_km":     payables.PaidSnapshotOrCanonicalExpr("payable_distance_km", distance),
+			"commission_payable":      payables.PaidSnapshotOrCanonicalExpr("commission_payable", commission),
+			"petrol_payable":          payables.PaidSnapshotOrCanonicalExpr("petrol_payable", petrol),
+			"petrol_ledger_entry_ids": "$petrol_ledger_entries._id",
+			"petrol_paid_amount": bson.M{"$divide": bson.A{
+				bson.M{"$sum": "$petrol_ledger_entries.settled_amount_paise"}, 100,
+			}},
+			"petrol_pending_amount": bson.M{"$divide": bson.A{
+				bson.M{"$max": bson.A{
+					0,
+					bson.M{"$subtract": bson.A{
+						bson.M{"$sum": "$petrol_ledger_entries.amount_paise"},
+						bson.M{"$sum": "$petrol_ledger_entries.settled_amount_paise"},
+					}},
+				}},
+				100,
+			}},
+			"petrol_payment_status": bson.M{"$switch": bson.M{
+				"branches": bson.A{
+					bson.M{"case": bson.M{"$eq": bson.A{bson.M{"$size": "$petrol_ledger_entries"}, 0}}, "then": "not_ready"},
+					bson.M{"case": bson.M{"$lte": bson.A{
+						bson.M{"$subtract": bson.A{
+							bson.M{"$sum": "$petrol_ledger_entries.amount_paise"},
+							bson.M{"$sum": "$petrol_ledger_entries.settled_amount_paise"},
+						}},
+						0,
+					}}, "then": "paid"},
+					bson.M{"case": bson.M{"$gt": bson.A{
+						bson.M{"$sum": "$petrol_ledger_entries.settled_amount_paise"}, 0,
+					}}, "then": "partially_paid"},
+				},
+				"default": "unpaid",
+			}},
+			"payable_snapshot": 1, "fare_calculation": 1,
 		}}},
 		{{Key: "$sort", Value: bson.D{{Key: "service_date", Value: -1}, {Key: "trip_number", Value: 1}}}},
 		{{Key: "$limit", Value: 10000}},
@@ -235,20 +291,24 @@ func reportDateBounds(startDate, endDate string) (time.Time, time.Time, error) {
 
 func (r *Repository) loadReportPayouts(ctx context.Context, officeID, workerID primitive.ObjectID, startDate, endDate string) ([]ReportPayout, error) {
 	rows := make([]ReportPayout, 0)
-	current, _, err := r.ListSettlements(ctx, SettlementFilter{OfficeID: officeID.Hex(), WorkerID: workerID.Hex(), StartDate: startDate, EndDate: endDate, Page: 1, Limit: 10000})
+	current, _, err := r.ListSettlements(ctx, SettlementFilter{OfficeID: officeID.Hex(), WorkerID: workerID.Hex(), Page: 1, Limit: 10000})
+	if err != nil {
+		return nil, err
+	}
+	start, end, err := reportDateBounds(startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
 	for _, settlement := range current {
+		if !reportPeriodOverlaps(settlement.StartDate, settlement.EndDate, startDate, endDate) &&
+			(settlement.CreatedAt.Before(start) || settlement.CreatedAt.After(end)) {
+			continue
+		}
 		rows = append(rows, ReportPayout{
 			ID: settlement.ID, PayoutDate: settlement.CreatedAt, PayoutType: settlement.Bucket,
 			PeriodStart: settlement.StartDate, PeriodEnd: settlement.EndDate, Amount: float64(settlement.AmountPaise) / 100,
 			PaymentMethod: settlement.PaymentMethod, ReferenceNumber: settlement.Reference, Remarks: settlement.Remarks, Editable: true,
 		})
-	}
-	start, end, err := reportDateBounds(startDate, endDate)
-	if err != nil {
-		return nil, err
 	}
 	type legacyPayout struct {
 		ID              primitive.ObjectID `bson:"_id"`
@@ -264,8 +324,8 @@ func (r *Repository) loadReportPayouts(ctx context.Context, officeID, workerID p
 	cursor, err := r.db.Collection("payouts").Find(ctx, bson.M{
 		"office_id": officeID, "staff_id": workerID, "is_deleted": bson.M{"$ne": true},
 		"$or": bson.A{
-			bson.M{"payout_date": bson.M{"$gte": start, "$lte": end}},
 			bson.M{"period_start": bson.M{"$lte": end}, "period_end": bson.M{"$gte": start}},
+			bson.M{"payout_date": bson.M{"$gte": start, "$lte": end}},
 		},
 	}, options.Find().SetSort(bson.D{{Key: "payout_date", Value: -1}}).SetLimit(10000))
 	if err != nil {
@@ -287,6 +347,20 @@ func (r *Repository) loadReportPayouts(ctx context.Context, officeID, workerID p
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].PayoutDate.After(rows[j].PayoutDate) })
 	return rows, nil
+}
+
+func reportPeriodOverlaps(periodStart, periodEnd, startDate, endDate string) bool {
+	return periodStart != "" && periodEnd != "" && periodStart <= endDate && periodEnd >= startDate
+}
+
+func reportPayoutsCoveringPeriod(payouts []ReportPayout, startDate, endDate string) []ReportPayout {
+	rows := make([]ReportPayout, 0)
+	for _, payout := range payouts {
+		if reportPeriodOverlaps(payout.PeriodStart, payout.PeriodEnd, startDate, endDate) {
+			rows = append(rows, payout)
+		}
+	}
+	return rows
 }
 
 func (r *Repository) loadReportAdjustments(ctx context.Context, officeID, workerID primitive.ObjectID, startDate, endDate string) ([]ReportAdjustment, error) {
