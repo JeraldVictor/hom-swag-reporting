@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -36,7 +37,7 @@ type PreviewRequest struct {
 	Format          string                 `json:"format,omitempty"`
 	OfficeID        string                 `json:"office_id,omitempty"`
 	Parameters      map[string]interface{} `json:"parameters"`
-	Limit           int                    `json:"limit"`
+	Limit           *int                   `json:"limit,omitempty"`
 	SelectedColumns []string               `json:"selected_columns,omitempty"`
 	AllowSensitive  bool                   `json:"allow_sensitive_columns,omitempty"`
 }
@@ -119,14 +120,29 @@ func buildReportRequest(req PreviewRequest) reports.Request {
 		parameters["office_id"] = req.OfficeID
 	}
 
+	limit := 0
+	if req.Limit != nil {
+		limit = *req.Limit
+	}
+
 	return reports.Request{
 		ReportKey:       req.ReportKey,
 		Version:         req.Version,
 		Parameters:      parameters,
-		Limit:           req.Limit,
+		Limit:           limit,
 		SelectedColumns: req.SelectedColumns,
 		AllowSensitive:  req.AllowSensitive,
 	}
+}
+
+func normalizePreviewLimit(limit *int) (int, error) {
+	if limit == nil {
+		return 100, nil
+	}
+	if *limit < 0 {
+		return 0, fmt.Errorf("limit must be zero or greater")
+	}
+	return *limit, nil
 }
 
 func runInMemoryReport(ctx context.Context, executor reports.Executor, req reports.Request) (*MemorySink, error) {
@@ -462,9 +478,12 @@ func main() {
 			return
 		}
 
-		if req.Limit <= 0 {
-			req.Limit = 100
+		limit, err := normalizePreviewLimit(req.Limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
+		req.Limit = &limit
 
 		executor, ok := registry.Get(req.ReportKey, req.Version)
 		if !ok {

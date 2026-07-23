@@ -41,6 +41,27 @@ func (summaryTestExecutor) Columns() []reports.Column {
 	}
 }
 
+func TestNormalizePreviewLimitDefaultsOnlyWhenOmitted(t *testing.T) {
+	if got, err := normalizePreviewLimit(nil); err != nil || got != 100 {
+		t.Fatalf("omitted limit = %d, %v; want 100, nil", got, err)
+	}
+
+	unlimited := 0
+	if got, err := normalizePreviewLimit(&unlimited); err != nil || got != 0 {
+		t.Fatalf("explicit zero limit = %d, %v; want 0, nil", got, err)
+	}
+
+	limited := 500
+	if got, err := normalizePreviewLimit(&limited); err != nil || got != 500 {
+		t.Fatalf("positive limit = %d, %v; want 500, nil", got, err)
+	}
+
+	invalid := -1
+	if _, err := normalizePreviewLimit(&invalid); err == nil {
+		t.Fatal("negative limit should be rejected")
+	}
+}
+
 func TestSummarizeRowsUsesRawIndexesAndSkipsTotalRow(t *testing.T) {
 	rows := [][]interface{}{
 		{"Customer Name", "Cash", "Online"},
