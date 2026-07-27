@@ -19,6 +19,7 @@ const (
 	settlementCollection = "earnings_settlements"
 	modeCollection       = "earnings_mode_settings"
 	orderIssueCollection = "earnings_order_issues"
+	tripIssueCollection  = "earnings_trip_issues"
 )
 
 var (
@@ -411,6 +412,14 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 	_, err = r.db.Collection(orderIssueCollection).Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "issue_key", Value: 1}}, Options: options.Index().SetUnique(true)},
+		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "status", Value: 1}, {Key: "service_date", Value: -1}}},
+		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "issue_type", Value: 1}, {Key: "severity", Value: 1}}},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Collection(tripIssueCollection).Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "issue_key", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "status", Value: 1}, {Key: "service_date", Value: -1}}},
 		{Keys: bson.D{{Key: "office_id", Value: 1}, {Key: "issue_type", Value: 1}, {Key: "severity", Value: 1}}},

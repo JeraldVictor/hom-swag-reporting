@@ -17,10 +17,11 @@ import (
 var dateKeyPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 type API struct {
-	repo      Store
-	issues    OrderIssueStore
-	jwtSecret string
-	mode      string
+	repo       Store
+	issues     OrderIssueStore
+	tripIssues TripIssueStore
+	jwtSecret  string
+	mode       string
 }
 
 type Store interface {
@@ -52,7 +53,8 @@ func NewAPI(repo Store, jwtSecret, mode string) *API {
 		mode = ModeShadow
 	}
 	issueStore, _ := repo.(OrderIssueStore)
-	return &API{repo: repo, issues: issueStore, jwtSecret: jwtSecret, mode: mode}
+	tripIssueStore, _ := repo.(TripIssueStore)
+	return &API{repo: repo, issues: issueStore, tripIssues: tripIssueStore, jwtSecret: jwtSecret, mode: mode}
 }
 
 func (a *API) Handler() http.Handler { return http.HandlerFunc(a.serveHTTP) }
@@ -95,6 +97,12 @@ func (a *API) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		a.require(w, principal, "ledger.rebuild", func() { a.scanOrderIssues(w, r, officeID) })
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/order-issues/") && strings.HasSuffix(path, "/actions"):
 		a.orderIssueAction(w, r, principal, officeID, path)
+	case r.Method == http.MethodGet && path == "/trip-issues":
+		a.require(w, principal, "ledger.read", func() { a.listTripIssues(w, r, officeID) })
+	case r.Method == http.MethodPost && path == "/trip-issues/scan":
+		a.require(w, principal, "ledger.rebuild", func() { a.scanTripIssues(w, r, officeID) })
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/trip-issues/") && strings.HasSuffix(path, "/actions"):
+		a.tripIssueAction(w, r, principal, officeID, path)
 	case r.Method == http.MethodPost && path == "/mode":
 		a.require(w, principal, "ledger.cutover", func() { a.changeMode(w, r, principal, officeID) })
 	case r.Method == http.MethodPost && path == "/adjustments":
@@ -114,6 +122,126 @@ func (a *API) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, errors.New("earnings endpoint not found"))
 	}
+}
+
+func (a *API) scanTripIssues(w http.ResponseWriter, r *http.Request, officeID string) {
+	if a.tripIssues == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("trip reconciliation is unavailable"))
+		return
+	}
+	var input orderIssueScanRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := validateDateRange(input.StartDate, input.EndDate); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := a.tripIssues.ScanTripIssues(r.Context(), mustObjectID(officeID), input.StartDate, input.EndDate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"scan": result})
+}
+
+func (a *API) listTripIssues(w http.ResponseWriter, r *http.Request, officeID string) {
+	if a.tripIssues == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("trip reconciliation is unavailable"))
+		return
+	}
+	query := r.URL.Query()
+	startDate, endDate := query.Get("start_date"), query.Get("end_date")
+	if (startDate == "") != (endDate == "") {
+		writeError(w, http.StatusBadRequest, errors.New("start_date and end_date must be provided together"))
+		return
+	}
+	if startDate != "" {
+		if err := validateDateRange(startDate, endDate); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	status, issueType, severity := strings.TrimSpace(query.Get("status")), strings.TrimSpace(query.Get("issue_type")), strings.TrimSpace(query.Get("severity"))
+	if status != "" && status != "all" && status != OrderIssueOpen && status != OrderIssueResolved && status != OrderIssueAccepted {
+		writeError(w, http.StatusBadRequest, errors.New("status must be open, resolved, accepted, or all"))
+		return
+	}
+	validTypes := map[string]bool{
+		"": true, "all": true, TripIssueMissingWorker: true, TripIssueDeletedWorker: true,
+		TripIssueMissingSnapshot: true, TripIssueInvalidConfig: true, TripIssueDistanceMismatch: true,
+		TripIssuePetrolMismatch: true, TripIssueCommissionMismatch: true,
+	}
+	if !validTypes[issueType] {
+		writeError(w, http.StatusBadRequest, errors.New("unsupported issue_type"))
+		return
+	}
+	validSeverities := map[string]bool{"": true, "all": true, "warning": true, "high": true, "critical": true}
+	if !validSeverities[severity] {
+		writeError(w, http.StatusBadRequest, errors.New("severity must be warning, high, critical, or all"))
+		return
+	}
+	page, limit := boundedPagination(r)
+	issues, total, err := a.tripIssues.ListTripIssues(r.Context(), TripIssueFilter{
+		OfficeID: mustObjectID(officeID), StartDate: startDate, EndDate: endDate, Status: status,
+		IssueType: issueType, Severity: severity, Search: query.Get("search"), Page: page, Limit: limit,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"issues": issues, "total": total, "page": page, "limit": limit})
+}
+
+func (a *API) tripIssueAction(w http.ResponseWriter, r *http.Request, principal Principal, officeID, path string) {
+	if a.tripIssues == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("trip reconciliation is unavailable"))
+		return
+	}
+	idText := strings.TrimSuffix(strings.TrimPrefix(path, "/trip-issues/"), "/actions")
+	if err := validateObjectID("issue_id", idText); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var input orderIssueActionRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.Action, input.Reason = strings.TrimSpace(input.Action), strings.TrimSpace(input.Reason)
+	validActions := map[string]bool{TripIssueActionRecheck: true, TripIssueActionAccept: true, TripIssueActionRebuild: true}
+	if !validActions[input.Action] {
+		writeError(w, http.StatusBadRequest, errors.New("action must be recheck, accept_variance, or rebuild_payable_snapshot"))
+		return
+	}
+	permission := "ledger.rebuild"
+	if input.Action == TripIssueActionRebuild {
+		permission = "ledger.payout"
+	}
+	if !principal.HasPermission(permission) {
+		writeError(w, http.StatusForbidden, errors.New("missing permission: "+permission))
+		return
+	}
+	if input.Action != TripIssueActionRecheck && (input.Reason == "" || len(input.Reason) > 500) {
+		writeError(w, http.StatusBadRequest, errors.New("reason is required and must be at most 500 characters"))
+		return
+	}
+	issue, err := a.tripIssues.ActOnTripIssue(r.Context(), mustObjectID(officeID), mustObjectID(idText), TripIssueActionInput{
+		Action: input.Action, Reason: input.Reason, Actor: mustObjectID(principal.StaffID),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTripIssueNotFound):
+			writeError(w, http.StatusNotFound, err)
+		case errors.Is(err, ErrTripIssueAlreadyClosed), errors.Is(err, ErrTripIssueUnsupported), errors.Is(err, ErrTripIssuePaid):
+			writeError(w, http.StatusConflict, err)
+		default:
+			writeError(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"issue": issue})
 }
 
 type orderIssueScanRequest struct {
@@ -165,7 +293,11 @@ func (a *API) listOrderIssues(w http.ResponseWriter, r *http.Request, officeID s
 		writeError(w, http.StatusBadRequest, errors.New("status must be open, resolved, accepted, or all"))
 		return
 	}
-	validTypes := map[string]bool{"": true, "all": true, OrderIssuePaymentMismatch: true, OrderIssueMissingPayment: true, OrderIssueInvalidTotal: true}
+	validTypes := map[string]bool{
+		"": true, "all": true, OrderIssuePaymentMismatch: true, OrderIssueMissingPayment: true,
+		OrderIssueInvalidTotal: true, OrderIssueMissingBeautician: true, OrderIssueDeletedBeautician: true,
+		OrderIssueMissingCommission: true, OrderIssueInvalidCommission: true,
+	}
 	if !validTypes[issueType] {
 		writeError(w, http.StatusBadRequest, errors.New("unsupported issue_type"))
 		return

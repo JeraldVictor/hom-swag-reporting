@@ -3,6 +3,7 @@ package earnings
 import (
 	"context"
 	"errors"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -11,9 +12,13 @@ import (
 )
 
 const (
-	OrderIssuePaymentMismatch = "payment_total_mismatch"
-	OrderIssueMissingPayment  = "missing_payment"
-	OrderIssueInvalidTotal    = "order_total_formula_mismatch"
+	OrderIssuePaymentMismatch   = "payment_total_mismatch"
+	OrderIssueMissingPayment    = "missing_payment"
+	OrderIssueInvalidTotal      = "order_total_formula_mismatch"
+	OrderIssueMissingBeautician = "missing_beautician_assignment"
+	OrderIssueDeletedBeautician = "deleted_beautician_profile"
+	OrderIssueMissingCommission = "missing_commission_snapshot"
+	OrderIssueInvalidCommission = "invalid_commission_snapshot"
 
 	OrderIssueOpen     = "open"
 	OrderIssueResolved = "resolved"
@@ -125,21 +130,69 @@ type orderIssueBooking struct {
 }
 
 type orderIssueSource struct {
-	ID                 primitive.ObjectID `bson:"_id"`
-	OfficeID           primitive.ObjectID `bson:"office_id"`
-	OrderNumber        string             `bson:"order_number"`
-	Status             string             `bson:"status"`
-	IsDeleted          bool               `bson:"is_deleted"`
-	Booking            orderIssueBooking  `bson:"booking_info"`
-	Subtotal           float64            `bson:"subtotal"`
-	ConvenienceFees    float64            `bson:"convenience_fees"`
-	HygieneFees        float64            `bson:"hygiene_fees"`
-	MembershipCharge   float64            `bson:"membership_charge"`
-	DiscountTotal      float64            `bson:"discount_total"`
-	Total              *float64           `bson:"total,omitempty"`
-	Tip                float64            `bson:"tip"`
-	CODCollectedAmount float64            `bson:"cod_collected_amount"`
-	Payment            orderIssuePayment  `bson:"payment"`
+	ID                 primitive.ObjectID  `bson:"_id"`
+	OfficeID           primitive.ObjectID  `bson:"office_id"`
+	OrderNumber        string              `bson:"order_number"`
+	BeauticianID       *primitive.ObjectID `bson:"beautician_id"`
+	Status             string              `bson:"status"`
+	IsDeleted          bool                `bson:"is_deleted"`
+	Booking            orderIssueBooking   `bson:"booking_info"`
+	Subtotal           float64             `bson:"subtotal"`
+	ConvenienceFees    float64             `bson:"convenience_fees"`
+	HygieneFees        float64             `bson:"hygiene_fees"`
+	MembershipCharge   float64             `bson:"membership_charge"`
+	DiscountTotal      float64             `bson:"discount_total"`
+	Total              *float64            `bson:"total,omitempty"`
+	Tip                float64             `bson:"tip"`
+	CODCollectedAmount float64             `bson:"cod_collected_amount"`
+	Payment            orderIssuePayment   `bson:"payment"`
+	CommissionSnapshot *CommissionSnapshot `bson:"commission_snapshot"`
+}
+
+func detectOrderCommissionIssues(source orderIssueSource, beautician *tripIssueWorker, now time.Time) []OrderReconciliationIssue {
+	issues := make([]OrderReconciliationIssue, 0)
+	// Legacy orders without either commission-era field remain covered by the
+	// payment reconciliation checks. Once either field exists, require the
+	// complete commission attribution and snapshot contract.
+	if source.BeauticianID == nil && source.CommissionSnapshot == nil {
+		return issues
+	}
+	if source.BeauticianID == nil || source.BeauticianID.IsZero() {
+		issues = append(issues, newOrderIssue(source, source.Booking.Date, OrderIssueMissingBeautician, "critical", 0, 0,
+			"The completed order has no beautician assignment, so commission cannot be attributed.", now,
+			map[string]interface{}{"recommended_fix": "Assign the correct beautician at source, then recheck the order."}))
+	} else if beautician == nil {
+		issues = append(issues, newOrderIssue(source, source.Booking.Date, OrderIssueMissingBeautician, "critical", 0, 0,
+			"The assigned beautician profile does not exist in this office.", now,
+			map[string]interface{}{"beautician_id": source.BeauticianID.Hex(), "recommended_fix": "Assign an active beautician from this office, then recheck."}))
+	} else if beautician.IsDeleted {
+		issues = append(issues, newOrderIssue(source, source.Booking.Date, OrderIssueDeletedBeautician, "critical", 0, 0,
+			"The completed order is assigned to a deleted beautician profile.", now,
+			map[string]interface{}{"beautician_id": beautician.ID.Hex(), "employee_code": beautician.EmpCode, "recommended_fix": "Review the employee identity, reassign the order to the active canonical profile, and recheck."}))
+	}
+	if source.CommissionSnapshot == nil {
+		issues = append(issues, newOrderIssue(source, source.Booking.Date, OrderIssueMissingCommission, "critical", 0, 0,
+			"The completed order has no commission snapshot, so its earnings cannot be independently audited.", now,
+			map[string]interface{}{"recommended_fix": "Rebuild the order commission snapshot using the verified order services and commission rules."}))
+		return issues
+	}
+	snapshot := source.CommissionSnapshot
+	values := map[string]*float64{
+		"order_cost": snapshot.OrderCost, "special_commission": snapshot.SpecialCommission,
+		"general_commission": snapshot.GeneralCommission, "upgrade_addon_commission": snapshot.UpgradeAddonCommission,
+	}
+	invalid := make([]string, 0)
+	for field, value := range values {
+		if value == nil || math.IsNaN(pointerMoney(value)) || math.IsInf(pointerMoney(value), 0) || pointerMoney(value) < 0 {
+			invalid = append(invalid, field)
+		}
+	}
+	if len(invalid) > 0 {
+		issues = append(issues, newOrderIssue(source, source.Booking.Date, OrderIssueInvalidCommission, "critical", 0, 0,
+			"The order commission snapshot has missing, negative, or non-finite values.", now,
+			map[string]interface{}{"invalid_fields": invalid, "recommended_fix": "Correct the source commission inputs and rebuild the order commission snapshot."}))
+	}
+	return issues
 }
 
 func detectOrderIssues(source orderIssueSource, now time.Time) []OrderReconciliationIssue {

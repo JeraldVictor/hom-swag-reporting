@@ -159,6 +159,32 @@ buckets include these signed entries, so subsequent reports reflect the audited
 correction. Orders with legacy payment fields but no history must be fixed at
 source and cannot be aligned automatically.
 
+Order scans also validate commission-era records. They flag missing or deleted
+beautician assignments and missing or invalid commission snapshots. These
+issues are review-only because employee identity and service-level commission
+rules cannot be safely inferred from payment totals.
+
+### Trip reconciliation
+
+The Trip Issues workflow mirrors Order Issues for rider payables:
+
+- `POST /api/earnings/trip-issues/scan` (`ledger.rebuild`) scans payable
+  completed trips and persists worker, distance, petrol, commission, snapshot,
+  and office-rate discrepancies.
+- `GET /api/earnings/trip-issues` (`ledger.read`) lists office-scoped issues
+  with date, status, type, severity, trip/employee search, and pagination.
+- `POST /api/earnings/trip-issues/{id}/actions` rechecks an issue, accepts an
+  explained variance, or rebuilds an unpaid payable snapshot (`ledger.payout`).
+
+Snapshot repair is deterministic and audited. It recalculates payable distance,
+petrol, and trip commission from current trip and office inputs. Paid snapshots
+are immutable, and worker identity or assignment changes are never performed
+automatically.
+
+Rider commission exports include both `Total Commission` and `Total Rider
+Payable`; the latter explicitly adds petrol reimbursement, trip commission, and
+leaderboard bonus.
+
 ### Earnings source events
 
 The source-event topic accepts schema version 1 notifications. Notifications

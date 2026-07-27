@@ -13,6 +13,7 @@ var riderCommissionColumns = []reports.Column{
 	{Key: "leaderboard_rank", Label: "Leaderboard Rank", Type: "string", SourcePath: "leaderboard_rank", FormulaID: "rider.leaderboard_rank", DefaultVisible: true, Sortable: true},
 	{Key: "leaderboard_bonus", Label: "Leaderboard Bonus", Type: "currency", SourcePath: "leaderboard_bonus", FormulaID: "rider.leaderboard_bonus", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
 	{Key: "total_commission", Label: "Total Commission", Type: "currency", SourcePath: "total_commission", FormulaID: "rider.total_commission", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
+	{Key: "total_rider_payable", Label: "Total Rider Payable", Type: "currency", SourcePath: "total_rider_payable", FormulaID: "rider.total_payable", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
 }
 
 var petrolWeeklyColumns = []reports.Column{
@@ -141,6 +142,7 @@ var columnDescriptions = map[string]string{
 	"total_distance_km":               "Total payable trip distance in kilometres for included completed trips. Uses fare distance when available, otherwise auto distance, two-way multiplier, and extra kilometres.",
 	"total_received":                  "Total customer payment received for the order. If payment history exists, only positive non-tip, non-cancellation-fee entries are counted; otherwise legacy paid amount fields are used.",
 	"total_receivable_including_tips": "Net receivable including GST plus customer tips.",
+	"total_rider_payable":             "Full rider payable for the period: petrol reimbursement plus trip commission plus leaderboard bonus.",
 	"total_revenue":                   "Completed order revenue counted for the staff member in the selected period.",
 	"total_services_cost":             "Service subtotal before fees, discounts, tips, and cancellation charges.",
 	"total_value":                     "Gross order value before discounts: service subtotal plus convenience, hygiene, surge, membership, and eligible cancellation charges.",

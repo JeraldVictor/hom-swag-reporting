@@ -36,7 +36,19 @@ func (r *Repository) ScanOrderIssues(ctx context.Context, officeID primitive.Obj
 		if !validOrderIssueSource(source) {
 			continue
 		}
-		for _, issue := range detectOrderIssues(source, now) {
+		detected := detectOrderIssues(source, now)
+		var beautician *tripIssueWorker
+		if source.BeauticianID != nil && !source.BeauticianID.IsZero() {
+			var row tripIssueWorker
+			err := r.db.Collection("beauticians").FindOne(ctx, bson.M{"_id": *source.BeauticianID, "office_id": officeID}).Decode(&row)
+			if err == nil {
+				beautician = &row
+			} else if !errors.Is(err, mongo.ErrNoDocuments) {
+				return result, err
+			}
+		}
+		detected = append(detected, detectOrderCommissionIssues(source, beautician, now)...)
+		for _, issue := range detected {
 			detectedKeys = append(detectedKeys, issue.IssueKey)
 			stored, created, err := r.upsertOrderIssue(ctx, issue)
 			if err != nil {
@@ -187,7 +199,19 @@ func (r *Repository) recheckOrderIssue(ctx context.Context, issue OrderReconcili
 		return OrderReconciliationIssue{}, err
 	}
 	now := time.Now().UTC()
-	for _, detected := range detectOrderIssues(source, now) {
+	detectedIssues := detectOrderIssues(source, now)
+	var beautician *tripIssueWorker
+	if source.BeauticianID != nil && !source.BeauticianID.IsZero() {
+		var row tripIssueWorker
+		err := r.db.Collection("beauticians").FindOne(ctx, bson.M{"_id": *source.BeauticianID, "office_id": source.OfficeID}).Decode(&row)
+		if err == nil {
+			beautician = &row
+		} else if !errors.Is(err, mongo.ErrNoDocuments) {
+			return OrderReconciliationIssue{}, err
+		}
+	}
+	detectedIssues = append(detectedIssues, detectOrderCommissionIssues(source, beautician, now)...)
+	for _, detected := range detectedIssues {
 		if detected.IssueType == issue.IssueType {
 			stored, _, err := r.upsertOrderIssue(ctx, detected)
 			return stored, err

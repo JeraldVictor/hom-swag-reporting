@@ -199,6 +199,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		}
 		leaderboard := leaderboardByRider[result.ID]
 		totalCommission := roundPayment(result.CommissionPayable + leaderboard.Bonus)
+		totalRiderPayable := result.PetrolPayable + result.CommissionPayable + leaderboard.Bonus
 		sink.WriteRow([]interface{}{
 			result.ID.Hex(),
 			result.EmpCode,
@@ -210,6 +211,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 			formatRank(leaderboard.Rank),
 			fmt.Sprintf("%.2f", leaderboard.Bonus),
 			fmt.Sprintf("%.2f", totalCommission),
+			fmt.Sprintf("%.2f", totalRiderPayable),
 		})
 	}
 
@@ -395,6 +397,7 @@ func (e *RiderCommissionExecutor) runLedger(
 			id.Hex(), row.EmpCode, row.Name, row.TripCount, fmt.Sprintf("%.2f", row.TotalDistanceKM),
 			fmt.Sprintf("%.2f", petrol), fmt.Sprintf("%.2f", commission), formatRank(rank),
 			fmt.Sprintf("%.2f", bonus), fmt.Sprintf("%.2f", commission+bonus),
+			fmt.Sprintf("%.2f", petrol+commission+bonus),
 		}); err != nil {
 			return err
 		}
@@ -444,6 +447,7 @@ func riderCommissionHeader() []interface{} {
 	return []interface{}{
 		"Staff ID", "Employee Code", "Rider Name", "Trip Count", "Total Distance KM",
 		"Petrol Payable", "Trip Commission", "Leaderboard Rank", "Leaderboard Bonus", "Total Commission",
+		"Total Rider Payable",
 	}
 }
 

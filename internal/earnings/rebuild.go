@@ -61,6 +61,7 @@ type TripFareCalculation struct {
 type TripSource struct {
 	ID                 primitive.ObjectID  `bson:"_id"`
 	OfficeID           primitive.ObjectID  `bson:"office_id"`
+	TripNumber         string              `bson:"trip_number"`
 	RiderID            *primitive.ObjectID `bson:"rider_id"`
 	DriverBeauticianID *primitive.ObjectID `bson:"driver_beautician_id"`
 	BeauticianID       *primitive.ObjectID `bson:"beautician_id"`
