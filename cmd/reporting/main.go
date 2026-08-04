@@ -396,6 +396,7 @@ func main() {
 	registry.Register(static.NewStaffSummaryExecutor(mongoClient.Database))
 	registry.Register(static.NewCODPendingExecutor(mongoClient.Database))
 	registry.Register(static.NewCustomerBookingExecutor(mongoClient.Database))
+	registry.Register(static.NewProductInsightsExecutor(mongoClient.Database))
 
 	// Initialize Worker
 	worker := jobs.NewWorker(mongoClient, minioClient, cfg.TempDir, consumer, eventProducer, deadLetterProducer, registry)

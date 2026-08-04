@@ -117,6 +117,20 @@ var customerBookingColumns = []reports.Column{
 	{Key: "pincode", Label: "Pincode", Type: "string", SourcePath: "pincode", Sensitive: true, DefaultVisible: false, Filterable: true},
 }
 
+var productInsightsColumns = []reports.Column{
+	{Key: "rank", Label: "Rank", Type: "number", SourcePath: "rank", DefaultVisible: true, Sortable: true},
+	{Key: "product_id", Label: "Product ID", Type: "string", SourcePath: "product_id", DefaultVisible: false, Filterable: true},
+	{Key: "product_name", Label: "Product Name", Type: "string", SourcePath: "product_name", DefaultVisible: true, Sortable: true, Filterable: true},
+	{Key: "product_type", Label: "Product Type", Type: "string", SourcePath: "product_type", DefaultVisible: true, Filterable: true},
+	{Key: "main_menu", Label: "Main Menu", Type: "string", SourcePath: "main_menu", DefaultVisible: true, Filterable: true},
+	{Key: "category", Label: "Category", Type: "string", SourcePath: "category", DefaultVisible: true, Filterable: true},
+	{Key: "sub_category", Label: "Subcategory", Type: "string", SourcePath: "sub_category", DefaultVisible: true, Filterable: true},
+	{Key: "total_quantity", Label: "Total Quantity Ordered", Type: "number", SourcePath: "total_quantity", FormulaID: "product.ordered_quantity", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
+	{Key: "orders_with_product", Label: "Orders Containing Product", Type: "number", SourcePath: "order_count", FormulaID: "product.distinct_order_count", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
+	{Key: "gross_sales", Label: "Gross Product Sales", Type: "currency", SourcePath: "gross_sales", FormulaID: "product.gross_sales", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
+	{Key: "average_unit_revenue", Label: "Average Revenue per Unit", Type: "currency", SourcePath: "average_unit_revenue", FormulaID: "product.average_unit_revenue", DefaultVisible: true, Sortable: true},
+}
+
 var columnDescriptions = map[string]string{
 	"address_count":                   "Number of non-deleted saved addresses currently attached to the customer.",
 	"booking_count":                   "Number of bookings matching the selected date range, office, and order-status filter.",
@@ -143,6 +157,12 @@ var columnDescriptions = map[string]string{
 	"net_tips_payable":                "Tips collected from the customer after removing payment gateway charges on tips.",
 	"online":                          "Total positive UPI, card, wallet, online, or other digital payments recorded for the order. Refunds, tips, and cancellation fee labels are not counted here.",
 	"order_count":                     "Number of completed orders counted for the staff member in the selected period.",
+	"orders_with_product":             "Number of distinct matching orders that contain the product.",
+	"average_unit_revenue":            "Gross product sales divided by the total ordered quantity for the selected period.",
+	"gross_sales":                     "Sum of the stored line-item totals for the product in matching orders.",
+	"product_name":                    "Current catalog product name, falling back to the name saved on the order when the catalog record is unavailable.",
+	"rank":                            "Product position after sorting by total ordered quantity, then distinct order count and gross product sales.",
+	"total_quantity":                  "Sum of the ordered line-item quantity for the product across matching orders.",
 	"ot_count":                        "Overtime entries counted for the staff member in the selected period.",
 	"payable_amount":                  "Petrol amount payable for included completed trips. Uses calculated fare when available; otherwise calculates from payable distance and office petrol settings.",
 	"payable_general_commission":      "General commission payable after applying the report's commission rules.",

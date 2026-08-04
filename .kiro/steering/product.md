@@ -20,6 +20,7 @@ The HomSwag Reporting service is a dedicated Go worker/API service for heavy rep
 4. `daily_sales` - daily sales trends and summaries.
 5. `staff_summary` - staff leave and overtime summary.
 6. `customer_booking` - customer last-booking and saved-address zone report.
+7. `product_insights` - ranked product quantities, order counts, catalog hierarchy, and gross sales.
 
 ## Key Flows
 
