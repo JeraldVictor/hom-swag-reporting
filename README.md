@@ -37,6 +37,7 @@ before any production payout reads are switched over.
 3. `petrol_weekly`: Weekly rider petrol calculation.
 4. `daily_sales`: Daily sales trends and summaries.
 5. `staff_summary`: Staff leave and overtime summary.
+6. `customer_booking`: Customer last-booking and saved-address zone report with configurable filters and columns.
 
 ## Leaderboard API
 

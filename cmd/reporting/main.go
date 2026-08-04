@@ -47,9 +47,12 @@ type PreviewResponse struct {
 }
 
 type DefinitionResponse struct {
-	ReportKey string           `json:"report_key"`
-	Version   int              `json:"version"`
-	Columns   []reports.Column `json:"columns"`
+	ReportKey      string           `json:"report_key"`
+	Version        int              `json:"version"`
+	Columns        []reports.Column `json:"columns"`
+	Filters        []reports.Filter `json:"filters"`
+	AllowedFormats []string         `json:"allowed_formats"`
+	DefaultFormat  string           `json:"default_format"`
 }
 
 type SummaryResponse struct {
@@ -392,6 +395,7 @@ func main() {
 	registry.Register(static.NewDailySalesExecutor(mongoClient.Database))
 	registry.Register(static.NewStaffSummaryExecutor(mongoClient.Database))
 	registry.Register(static.NewCODPendingExecutor(mongoClient.Database))
+	registry.Register(static.NewCustomerBookingExecutor(mongoClient.Database))
 
 	// Initialize Worker
 	worker := jobs.NewWorker(mongoClient, minioClient, cfg.TempDir, consumer, eventProducer, deadLetterProducer, registry)
@@ -449,9 +453,21 @@ func main() {
 			definition := DefinitionResponse{
 				ReportKey: executor.Key(),
 				Version:   executor.Version(),
+				Filters: []reports.Filter{
+					{Key: "start_date", Label: "Start Date", Type: "date", Required: true},
+					{Key: "end_date", Label: "End Date", Type: "date", Required: true},
+				},
+				AllowedFormats: []string{"CSV", "XLSX", "PDF"},
+				DefaultFormat:  "CSV",
 			}
 			if provider, ok := executor.(reports.ColumnProvider); ok {
 				definition.Columns = provider.Columns()
+			}
+			if provider, ok := executor.(reports.DefinitionProvider); ok {
+				metadata := provider.Definition()
+				definition.Filters = metadata.Filters
+				definition.AllowedFormats = metadata.AllowedFormats
+				definition.DefaultFormat = metadata.DefaultFormat
 			}
 			definitions = append(definitions, definition)
 		}

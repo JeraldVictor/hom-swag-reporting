@@ -34,6 +34,25 @@ type Column struct {
 	DefaultVisible     bool
 }
 
+type FilterOption struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type Filter struct {
+	Key      string         `json:"key"`
+	Label    string         `json:"label"`
+	Type     string         `json:"type"`
+	Required bool           `json:"required"`
+	Options  []FilterOption `json:"options,omitempty"`
+}
+
+type DefinitionMetadata struct {
+	Filters        []Filter
+	AllowedFormats []string
+	DefaultFormat  string
+}
+
 type Executor interface {
 	Key() string
 	Version() int
@@ -43,6 +62,10 @@ type Executor interface {
 
 type ColumnProvider interface {
 	Columns() []Column
+}
+
+type DefinitionProvider interface {
+	Definition() DefinitionMetadata
 }
 
 type Registry struct {

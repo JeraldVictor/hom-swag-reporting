@@ -61,6 +61,7 @@ func TestReportExecutorsValidateDateRangesBeforeRunning(t *testing.T) {
 		NewRiderCommissionExecutor(nil),
 		NewPetrolWeeklyExecutor(nil),
 		NewStaffSummaryExecutor(nil),
+		NewCustomerBookingExecutor(nil),
 	}
 
 	req := reports.Request{

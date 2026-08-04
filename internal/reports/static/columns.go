@@ -98,7 +98,28 @@ var codPendingColumns = []reports.Column{
 	{Key: "cod_collected_amount", Label: "COD Collected Amount", Type: "currency", SourcePath: "cod_collected_amount", FormulaID: "payment.cod_pending_settlement", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
 }
 
+var customerBookingColumns = []reports.Column{
+	{Key: "customer_id", Label: "Customer ID", Type: "string", SourcePath: "customer_id", DefaultVisible: false, Filterable: true},
+	{Key: "customer_name", Label: "Customer Name", Type: "string", SourcePath: "customer_name", DefaultVisible: true, Sortable: true, Filterable: true},
+	{Key: "phone", Label: "Phone", Type: "string", SourcePath: "phone", Sensitive: true, DefaultVisible: true, Filterable: true},
+	{Key: "alternative_phone", Label: "Alternative Phone", Type: "string", SourcePath: "alternative_phone", Sensitive: true, DefaultVisible: false, Filterable: true},
+	{Key: "email", Label: "Email", Type: "string", SourcePath: "email", Sensitive: true, DefaultVisible: false, Filterable: true},
+	{Key: "gender", Label: "Gender", Type: "string", SourcePath: "gender", DefaultVisible: false, Filterable: true},
+	{Key: "customer_status", Label: "Customer Status", Type: "string", SourcePath: "customer_status", DefaultVisible: true, Filterable: true},
+	{Key: "registered_at", Label: "Registered Date", Type: "date", SourcePath: "registered_at", DefaultVisible: false, Sortable: true},
+	{Key: "last_booking_date", Label: "Last Booking Date", Type: "date", SourcePath: "last_booking_date", DefaultVisible: true, Sortable: true},
+	{Key: "booking_count", Label: "Bookings in Duration", Type: "number", SourcePath: "booking_count", ContributesToTotal: true, DefaultVisible: true, Sortable: true},
+	{Key: "zones", Label: "Zones", Type: "string", SourcePath: "zones", DefaultVisible: true, Filterable: true},
+	{Key: "address_count", Label: "Saved Address Count", Type: "number", SourcePath: "address_count", ContributesToTotal: true, DefaultVisible: false, Sortable: true},
+	{Key: "default_address", Label: "Default Address", Type: "string", SourcePath: "default_address", Sensitive: true, DefaultVisible: false},
+	{Key: "city", Label: "City", Type: "string", SourcePath: "city", DefaultVisible: false, Filterable: true},
+	{Key: "state", Label: "State", Type: "string", SourcePath: "state", DefaultVisible: false, Filterable: true},
+	{Key: "pincode", Label: "Pincode", Type: "string", SourcePath: "pincode", Sensitive: true, DefaultVisible: false, Filterable: true},
+}
+
 var columnDescriptions = map[string]string{
+	"address_count":                   "Number of non-deleted saved addresses currently attached to the customer.",
+	"booking_count":                   "Number of bookings matching the selected date range, office, and order-status filter.",
 	"beautician_pan":                  "Beautician PAN is sensitive and is shown only to users with report download permission.",
 	"bank_transfer":                   "Total positive payments recorded as bank transfer for the order. Refunds, tips, and cancellation fee labels are not counted here.",
 	"cash":                            "Total positive cash or COD payments recorded for the order. Refunds, tips, and cancellation fee labels are not counted here.",
@@ -111,6 +132,7 @@ var columnDescriptions = map[string]string{
 	"estimated_target1_commission":    "Projected total commission if Target 1 is achieved, calculated by the reporting service.",
 	"estimated_target2_commission":    "Projected total commission if Target 2 is achieved, calculated by the reporting service.",
 	"hygiene_fees":                    "Hygiene fee charged to the customer for this order.",
+	"last_booking_date":               "Latest matching booking date for the customer inside the selected duration.",
 	"leaderboard_bonus":               "Bonus added for the staff member's leaderboard position for the selected period.",
 	"leaderboard_rank":                "Rank assigned to the staff member for the selected report period.",
 	"leave_count":                     "Approved leave entries counted for the staff member in the selected period.",
@@ -148,6 +170,7 @@ var columnDescriptions = map[string]string{
 	"total_value":                     "Gross order value before discounts: service subtotal plus convenience, hygiene, surge, membership, and eligible cancellation charges.",
 	"trip_count":                      "Number of completed trips counted for the selected period.",
 	"upgrade_addon_commission":        "Commission payable for eligible upgrades or add-ons.",
+	"zones":                           "Unique zone names from all of the customer's current non-deleted saved addresses.",
 }
 
 func withColumnDescriptions(columns []reports.Column) []reports.Column {

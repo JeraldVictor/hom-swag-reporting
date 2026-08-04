@@ -19,6 +19,7 @@ The HomSwag Reporting service is a dedicated Go worker/API service for heavy rep
 3. `petrol_weekly` - weekly rider petrol calculations.
 4. `daily_sales` - daily sales trends and summaries.
 5. `staff_summary` - staff leave and overtime summary.
+6. `customer_booking` - customer last-booking and saved-address zone report.
 
 ## Key Flows
 
