@@ -117,6 +117,23 @@ var customerBookingColumns = []reports.Column{
 	{Key: "pincode", Label: "Pincode", Type: "string", SourcePath: "pincode", Sensitive: true, DefaultVisible: false, Filterable: true},
 }
 
+var customerInformationColumns = []reports.Column{
+	{Key: "customer_id", Label: "Customer ID", Type: "string", SourcePath: "customer_id", DefaultVisible: false, Filterable: true},
+	{Key: "customer_name", Label: "Customer Name", Type: "string", SourcePath: "customer_name", DefaultVisible: true, Sortable: true, Filterable: true},
+	{Key: "phone", Label: "Phone", Type: "string", SourcePath: "phone", Sensitive: true, DefaultVisible: true, Filterable: true},
+	{Key: "email", Label: "Email", Type: "string", SourcePath: "email", Sensitive: true, DefaultVisible: false, Filterable: true},
+	{Key: "gender", Label: "Gender", Type: "string", SourcePath: "gender", DefaultVisible: false, Filterable: true},
+	{Key: "customer_status", Label: "Customer Status", Type: "string", SourcePath: "customer_status", DefaultVisible: true, Filterable: true},
+	{Key: "created_at", Label: "Created Date", Type: "date", SourcePath: "created_at", DefaultVisible: true, Sortable: true},
+	{Key: "last_booking_date", Label: "Last Booking Date", Type: "date", SourcePath: "last_booking_date", DefaultVisible: false, Sortable: true},
+	{Key: "zones", Label: "Zones", Type: "string", SourcePath: "zones", DefaultVisible: true, Filterable: true},
+	{Key: "address_count", Label: "Saved Address Count", Type: "number", SourcePath: "address_count", ContributesToTotal: false, DefaultVisible: false, Sortable: true},
+	{Key: "default_address", Label: "Default Address", Type: "string", SourcePath: "default_address", Sensitive: true, DefaultVisible: false},
+	{Key: "city", Label: "City", Type: "string", SourcePath: "city", DefaultVisible: false, Filterable: true},
+	{Key: "state", Label: "State", Type: "string", SourcePath: "state", DefaultVisible: false, Filterable: true},
+	{Key: "pincode", Label: "Pincode", Type: "string", SourcePath: "pincode", Sensitive: true, DefaultVisible: false, Filterable: true},
+}
+
 var productInsightsColumns = []reports.Column{
 	{Key: "rank", Label: "Rank", Type: "number", SourcePath: "rank", DefaultVisible: true, Sortable: true},
 	{Key: "product_id", Label: "Product ID", Type: "string", SourcePath: "product_id", DefaultVisible: false, Filterable: true},
@@ -133,6 +150,7 @@ var productInsightsColumns = []reports.Column{
 
 var columnDescriptions = map[string]string{
 	"address_count":                   "Number of non-deleted saved addresses currently attached to the customer.",
+	"created_at":                      "Date when the customer profile was created.",
 	"booking_count":                   "Number of bookings matching the selected date range, office, and order-status filter.",
 	"beautician_pan":                  "Beautician PAN is sensitive and is shown only to users with report download permission.",
 	"bank_transfer":                   "Total positive payments recorded as bank transfer for the order. Refunds, tips, and cancellation fee labels are not counted here.",
