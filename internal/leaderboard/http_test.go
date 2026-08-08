@@ -37,6 +37,9 @@ func TestLeaderboardHTTPValidationAndResponses(t *testing.T) {
 		{name: "invalid gender", method: http.MethodPost, body: `{"office_id":"` + officeID.Hex() + `","period":"monthly","role":"rider","gender":"unknown"}`, want: 400},
 		{name: "invalid viewer", method: http.MethodPost, body: `{"office_id":"` + officeID.Hex() + `","period":"monthly","role":"rider","field":true,"viewer_id":"bad"}`, want: 400},
 		{name: "invalid period", method: http.MethodPost, body: `{"office_id":"` + officeID.Hex() + `","period":"bad","role":"rider"}`, want: 500},
+		{name: "custom missing dates", method: http.MethodPost, body: `{"office_id":"` + officeID.Hex() + `","period":"custom","role":"rider"}`, want: 400},
+		{name: "custom reversed dates", method: http.MethodPost, body: `{"office_id":"` + officeID.Hex() + `","period":"custom","start_date":"2026-08-02","end_date":"2026-08-01","role":"rider"}`, want: 400},
+		{name: "custom success", method: http.MethodPost, body: `{"office_id":"` + officeID.Hex() + `","period":"custom","start_date":"2026-08-01","end_date":"2026-08-02","role":"rider"}`, want: 200},
 		{name: "success default gender", method: http.MethodPost, body: `{"office_id":"` + officeID.Hex() + `","period":"monthly","role":"rider"}`, want: 200},
 	} {
 		t.Run(test.name, func(t *testing.T) {

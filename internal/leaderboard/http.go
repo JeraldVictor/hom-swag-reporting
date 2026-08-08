@@ -19,12 +19,14 @@ type API struct {
 func NewAPI(service *Service) *API { return &API{service: service, now: time.Now} }
 
 type request struct {
-	OfficeID string `json:"office_id"`
-	Period   string `json:"period"`
-	Role     string `json:"role"`
-	Gender   string `json:"gender"`
-	ViewerID string `json:"viewer_id"`
-	Field    bool   `json:"field"`
+	OfficeID  string `json:"office_id"`
+	Period    string `json:"period"`
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
+	Role      string `json:"role"`
+	Gender    string `json:"gender"`
+	ViewerID  string `json:"viewer_id"`
+	Field     bool   `json:"field"`
 }
 
 func (a *API) Handler() http.Handler {
@@ -60,6 +62,12 @@ func (a *API) Handler() http.Handler {
 			http.Error(w, "gender must be all, male, female, or other", http.StatusBadRequest)
 			return
 		}
+		if input.Period == "custom" {
+			if _, _, err := QueryBounds(input.Period, input.StartDate, input.EndDate, a.now()); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		var viewerID primitive.ObjectID
 		if input.Field {
 			viewerID, err = primitive.ObjectIDFromHex(strings.TrimSpace(input.ViewerID))
@@ -70,6 +78,7 @@ func (a *API) Handler() http.Handler {
 		}
 		response, err := a.service.Get(r.Context(), Query{
 			OfficeID: officeID, Period: input.Period, Role: input.Role, Gender: input.Gender,
+			StartDate: input.StartDate, EndDate: input.EndDate,
 			ViewerID: viewerID, Field: input.Field, Now: a.now(),
 		})
 		if errors.Is(err, ErrLeaderboardPermission) {

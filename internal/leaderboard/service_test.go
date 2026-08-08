@@ -60,6 +60,23 @@ func TestPeriodBounds(t *testing.T) {
 	}
 }
 
+func TestQueryBoundsCustomRange(t *testing.T) {
+	now := time.Date(2026, time.August, 8, 0, 0, 0, 0, time.UTC)
+	start, end, err := QueryBounds("custom", "2026-07-01", "2026-07-31", now)
+	if err != nil || start != "2026-07-01" || end != "2026-07-31" {
+		t.Fatalf("bounds=(%q,%q) err=%v", start, end, err)
+	}
+	for _, dates := range [][2]string{
+		{"", "2026-07-31"},
+		{"2026-07-01", "bad"},
+		{"2026-08-01", "2026-07-31"},
+	} {
+		if _, _, err := QueryBounds("custom", dates[0], dates[1], now); err == nil {
+			t.Fatalf("expected custom range %q to fail", dates)
+		}
+	}
+}
+
 func TestServiceAdminBeauticianRanking(t *testing.T) {
 	first, second, missing := primitive.NewObjectID(), primitive.NewObjectID(), primitive.NewObjectID()
 	store := &mockLeaderboardStore{

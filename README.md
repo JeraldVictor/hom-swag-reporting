@@ -51,8 +51,9 @@ requests, and proxies this endpoint.
 
 When `REPORTING_API_TOKEN` is configured, the TypeScript server and reporting
 service must use the same value. Supported periods are `weekly`, `monthly`,
-`yearly`, `financial_year`, and `all_time`; supported roles are `beautician`
-and `rider`.
+`yearly`, `financial_year`, `all_time`, and `custom`; custom requests require
+inclusive `start_date` and `end_date` values in `YYYY-MM-DD` format. Supported
+roles are `beautician` and `rider`.
 
 ## Running Locally
 

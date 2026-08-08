@@ -12,13 +12,15 @@ import (
 var ErrLeaderboardPermission = errors.New("viewer does not have permission to view the leaderboard")
 
 type Query struct {
-	OfficeID primitive.ObjectID
-	Period   string
-	Role     string
-	Gender   string
-	ViewerID primitive.ObjectID
-	Field    bool
-	Now      time.Time
+	OfficeID  primitive.ObjectID
+	Period    string
+	StartDate string
+	EndDate   string
+	Role      string
+	Gender    string
+	ViewerID  primitive.ObjectID
+	Field     bool
+	Now       time.Time
 }
 
 type SourceScore struct {
@@ -55,6 +57,8 @@ type Entry struct {
 
 type Response struct {
 	Period       string        `json:"period"`
+	StartDate    string        `json:"start_date"`
+	EndDate      string        `json:"end_date"`
 	Role         string        `json:"role"`
 	Gender       string        `json:"gender,omitempty"`
 	Entries      []Entry       `json:"entries"`
@@ -75,7 +79,7 @@ type Service struct{ store Store }
 func NewService(store Store) *Service { return &Service{store: store} }
 
 func (s *Service) Get(ctx context.Context, query Query) (Response, error) {
-	startDate, endDate, err := PeriodBounds(query.Period, query.Now)
+	startDate, endDate, err := QueryBounds(query.Period, query.StartDate, query.EndDate, query.Now)
 	if err != nil {
 		return Response{}, err
 	}
@@ -137,7 +141,10 @@ func (s *Service) Get(ctx context.Context, query Query) (Response, error) {
 		entries = append(entries, entry)
 	}
 
-	response := Response{Period: query.Period, Role: query.Role, Gender: query.Gender, Prizes: prizes, Entries: entries}
+	response := Response{
+		Period: query.Period, StartDate: startDate, EndDate: endDate, Role: query.Role,
+		Gender: query.Gender, Prizes: prizes, Entries: entries,
+	}
 	if !query.Field {
 		if len(response.Entries) > 1000 {
 			response.Entries = response.Entries[:1000]
@@ -226,4 +233,22 @@ func PeriodBounds(period string, now time.Time) (string, string, error) {
 		return "", "", errors.New("period must be weekly, monthly, yearly, financial_year, or all_time")
 	}
 	return start.Format("2006-01-02"), today.Format("2006-01-02"), nil
+}
+
+func QueryBounds(period, startDate, endDate string, now time.Time) (string, string, error) {
+	if period != "custom" {
+		return PeriodBounds(period, now)
+	}
+	start, err := time.Parse("2006-01-02", startDate)
+	if err != nil {
+		return "", "", errors.New("start_date must use YYYY-MM-DD for a custom period")
+	}
+	end, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		return "", "", errors.New("end_date must use YYYY-MM-DD for a custom period")
+	}
+	if start.After(end) {
+		return "", "", errors.New("start_date must be on or before end_date")
+	}
+	return startDate, endDate, nil
 }
