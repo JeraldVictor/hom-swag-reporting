@@ -3,11 +3,71 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/csv"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 )
+
+func signedAdminToken(t *testing.T, secret string) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"payload": map[string]interface{}{"sub": "staff-1", "is_admin": true},
+		"exp":     time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedHeader := base64.RawURLEncoding.EncodeToString(header)
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	signingInput := encodedHeader + "." + encodedPayload
+	signature := hmac.New(sha256.New, []byte(secret))
+	_, _ = signature.Write([]byte(signingInput))
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature.Sum(nil))
+}
+
+func TestBearerAuthAcceptsAdminJWTOrInternalServiceToken(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-jwt-secret")
+	t.Setenv("REPORTING_API_TOKEN", "internal-service-token")
+	handler := withBearerAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	tests := []struct {
+		name   string
+		token  string
+		status int
+	}{
+		{name: "missing", status: http.StatusUnauthorized},
+		{name: "invalid", token: "invalid", status: http.StatusUnauthorized},
+		{name: "service", token: "internal-service-token", status: http.StatusNoContent},
+		{name: "admin JWT", token: signedAdminToken(t, "test-jwt-secret"), status: http.StatusNoContent},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/definitions", nil)
+			if test.token != "" {
+				request.Header.Set("Authorization", "Bearer "+test.token)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d", response.Code, test.status)
+			}
+		})
+	}
+}
 
 type summaryTestExecutor struct {
 	validateErr error

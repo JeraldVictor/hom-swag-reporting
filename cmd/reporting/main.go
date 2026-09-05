@@ -89,12 +89,9 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-func withOptionalBearerAuth(next http.Handler) http.Handler {
-	token := strings.TrimSpace(os.Getenv("REPORTING_API_TOKEN"))
-	if token == "" {
-		return next
-	}
-
+func withBearerAuth(next http.Handler) http.Handler {
+	serviceToken := strings.TrimSpace(os.Getenv("REPORTING_API_TOKEN"))
+	jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
@@ -105,8 +102,12 @@ func withOptionalBearerAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		expected := "Bearer " + token
-		if r.Header.Get("Authorization") != expected {
+		authorization := r.Header.Get("Authorization")
+		if serviceToken != "" && authorization == "Bearer "+serviceToken {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, err := earnings.VerifyAdminToken(authorization, jwtSecret); err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -582,7 +583,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: withCORS(withOptionalBearerAuth(mux)),
+		Handler: withCORS(withBearerAuth(mux)),
 	}
 
 	go func() {
