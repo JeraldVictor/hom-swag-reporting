@@ -89,9 +89,9 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-func withBearerAuth(next http.Handler) http.Handler {
-	serviceToken := strings.TrimSpace(os.Getenv("REPORTING_API_TOKEN"))
-	jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+func withBearerAuth(next http.Handler, jwtSecret string, serviceToken string) http.Handler {
+	jwtSecret = strings.TrimSpace(jwtSecret)
+	serviceToken = strings.TrimSpace(serviceToken)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
@@ -583,7 +583,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: withCORS(withBearerAuth(mux)),
+		Handler: withCORS(withBearerAuth(mux, cfg.JWTSecret, cfg.ReportingAPIToken)),
 	}
 
 	go func() {

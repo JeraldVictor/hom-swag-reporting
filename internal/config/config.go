@@ -35,6 +35,7 @@ type Config struct {
 	OTELTracesURL               string
 	OTELServiceName             string
 	JWTSecret                   string
+	ReportingAPIToken           string
 	EarningsMode                string
 	AllowNonTransactionalWrites bool
 }
@@ -64,6 +65,7 @@ func Load() *Config {
 		OTELTracesURL:               getEnv("OTEL_TRACES_ENDPOINT", "http://127.0.0.1:4318/v1/traces"),
 		OTELServiceName:             getEnv("OTEL_REPORTING_SERVICE_NAME", "reporting-service"),
 		JWTSecret:                   getJWTSecret(),
+		ReportingAPIToken:           strings.TrimSpace(getEnv("REPORTING_API_TOKEN", "")),
 		EarningsMode:                getEnv("EARNINGS_MODE", "shadow"),
 		AllowNonTransactionalWrites: getEnvBool("EARNINGS_ALLOW_NON_TRANSACTIONAL_WRITES", false),
 	}

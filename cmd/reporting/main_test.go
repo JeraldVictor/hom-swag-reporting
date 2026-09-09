@@ -38,11 +38,9 @@ func signedAdminToken(t *testing.T, secret string) string {
 }
 
 func TestBearerAuthAcceptsAdminJWTOrInternalServiceToken(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-jwt-secret")
-	t.Setenv("REPORTING_API_TOKEN", "internal-service-token")
 	handler := withBearerAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	}), "test-jwt-secret", "internal-service-token")
 
 	tests := []struct {
 		name   string
@@ -66,6 +64,21 @@ func TestBearerAuthAcceptsAdminJWTOrInternalServiceToken(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.Code, test.status)
 			}
 		})
+	}
+}
+
+func TestBearerAuthFailsClosedWithoutConfiguredCredentials(t *testing.T) {
+	handler := withBearerAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), "", "")
+
+	request := httptest.NewRequest(http.MethodGet, "/definitions", nil)
+	request.Header.Set("Authorization", "Bearer "+signedAdminToken(t, "test-jwt-secret"))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
 	}
 }
 

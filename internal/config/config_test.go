@@ -51,3 +51,10 @@ func TestLoadNonTransactionalWritesDefaultsOffAndRequiresExplicitOptIn(t *testin
 		t.Fatal("expected explicit local opt-in to enable non-transactional writes")
 	}
 }
+
+func TestLoadTrimsReportingAPIToken(t *testing.T) {
+	t.Setenv("REPORTING_API_TOKEN", " internal-service-token ")
+	if got := Load().ReportingAPIToken; got != "internal-service-token" {
+		t.Fatalf("reporting API token = %q", got)
+	}
+}
