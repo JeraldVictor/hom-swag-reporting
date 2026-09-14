@@ -225,7 +225,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	}
 
 	monthStart, monthEnd := commissionTargetMonthBounds(endDate)
-	monthlyRevenueByBeautician, err := e.getMonthlyRevenueByBeautician(ctx, beauticianIDs, officeID, monthStart, monthEnd)
+	monthlyTargetRevenueByBeautician, err := e.getMonthlyTargetRevenueByBeautician(ctx, beauticianIDs, officeID, monthStart, monthEnd)
 	if err != nil {
 		return err
 	}
@@ -267,7 +267,8 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	})
 
 	for _, result := range rows {
-		monthlyRevenue := monthlyRevenueByBeautician[result.ID]
+		targetRevenue := monthlyTargetRevenueByBeautician[result.ID]
+		monthlyRevenue := targetRevenue.NetRevenue
 		target1Achieved := monthlyRevenue >= result.MonthlyTarget1
 		target2Achieved := result.MonthlyTarget2 > 0 && monthlyRevenue >= result.MonthlyTarget2
 		payableGeneralCommission := 0.0
@@ -285,6 +286,12 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			payableGeneralCommission = paiseToMoney(ledger.GeneralCommissionPaise)
 			result.TotalUpgradeAddonCommission = paiseToMoney(ledger.UpgradeCommissionPaise)
 			payableTarget2Bonus = paiseToMoney(ledger.TargetBonusPaise)
+			if !target1Achieved {
+				payableGeneralCommission = 0
+			}
+			if !target2Achieved {
+				payableTarget2Bonus = 0
+			}
 			leaderboard = beauticianLeaderboardBonus{
 				Rank: ledger.LeaderboardRank, Bonus: paiseToMoney(ledger.LeaderboardBonusPaise),
 			}
@@ -296,26 +303,33 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 				payableTarget2Bonus +
 				leaderboard.Bonus,
 		)
-		estimatedTarget1Commission := math.Max(totalCommission, roundPayment(
+		currentAfterTargetDeduction := math.Max(0, roundPayment(totalCommission+targetRevenue.Deduction))
+		estimatedTarget1Commission := math.Max(currentAfterTargetDeduction, math.Max(0, roundPayment(
 			result.TotalSpecialCommission+
 				result.TotalGeneralCommission+
 				result.TotalUpgradeAddonCommission+
 				payableTarget2Bonus+
-				leaderboard.Bonus,
-		))
-		estimatedTarget2Commission := math.Max(estimatedTarget1Commission, roundPayment(
+				leaderboard.Bonus+
+				targetRevenue.Deduction,
+		)))
+		estimatedTarget2Commission := math.Max(estimatedTarget1Commission, math.Max(0, roundPayment(
 			result.TotalSpecialCommission+
 				result.TotalGeneralCommission+
 				result.TotalUpgradeAddonCommission+
 				target2Bonus+
-				leaderboard.Bonus,
-		))
+				leaderboard.Bonus+
+				targetRevenue.Deduction,
+		)))
+		reportedRevenue := result.TotalRevenue
+		if startDateKey == monthStart.Format("2006-01-02") && endDateKey == monthEnd.Format("2006-01-02") {
+			reportedRevenue = monthlyRevenue
+		}
 		sink.WriteRow([]interface{}{
 			result.ID.Hex(),
 			result.EmpCode,
 			result.Name,
 			result.OrderCount,
-			fmt.Sprintf("%.2f", result.TotalRevenue),
+			fmt.Sprintf("%.2f", reportedRevenue),
 			fmt.Sprintf("%.2f", result.MonthlyTarget1),
 			formatBool(target1Achieved),
 			fmt.Sprintf("%.2f", result.MonthlyTarget2),
@@ -465,16 +479,21 @@ type beauticianLeaderboardBonus struct {
 	Bonus float64
 }
 
-func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
+type beauticianTargetRevenue struct {
+	NetRevenue float64
+	Deduction  float64
+}
+
+func (e *BeauticianCommissionExecutor) getMonthlyTargetRevenueByBeautician(
 	ctx context.Context,
 	beauticianIDs []primitive.ObjectID,
 	officeID primitive.ObjectID,
 	startDate time.Time,
 	endDate time.Time,
-) (map[primitive.ObjectID]float64, error) {
+) (map[primitive.ObjectID]beauticianTargetRevenue, error) {
 	startDateKey := startDate.Format("2006-01-02")
 	endDateKey := endDate.Format("2006-01-02")
-	revenueByBeautician := map[primitive.ObjectID]float64{}
+	revenueByBeautician := map[primitive.ObjectID]beauticianTargetRevenue{}
 	if len(beauticianIDs) == 0 {
 		return revenueByBeautician, nil
 	}
@@ -486,15 +505,50 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 		match["office_id"] = officeID
 	}
 
+	ledgerMatch := bson.M{
+		"worker_type": "beautician", "worker_id": bson.M{"$in": beauticianIDs},
+		"settlement_bucket": "commission", "status": bson.M{"$ne": "void"},
+		"service_date_key": bson.M{"$gte": startDateKey, "$lte": endDateKey},
+		"amount_paise":     bson.M{"$lt": 0},
+		"$or": bson.A{
+			bson.M{"component": "complaint_deduction"},
+			bson.M{"component": "commission_adjustment", "idempotency_key": bson.M{"$regex": "^complaint:"}},
+		},
+	}
+	if !officeID.IsZero() {
+		ledgerMatch["office_id"] = officeID
+	}
+
 	cursor, err := e.db.Collection("orders").Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: match}},
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
-			"total_revenue": bson.M{"$sum": bson.M{"$ifNull": bson.A{
+			"net_revenue": bson.M{"$sum": bson.M{"$ifNull": bson.A{
 				"$commission_snapshot.order_cost",
 				"$order_cost",
 				"$revenue",
 			}}},
+			"deduction": bson.M{"$sum": 0},
+		}}},
+		{{Key: "$unionWith", Value: bson.M{
+			"coll": "earnings_ledger",
+			"pipeline": mongo.Pipeline{
+				{{Key: "$match", Value: ledgerMatch}},
+				{{Key: "$group", Value: bson.M{
+					"_id":         "$worker_id",
+					"net_revenue": bson.M{"$sum": bson.M{"$divide": bson.A{"$amount_paise", 100}}},
+					"deduction":   bson.M{"$sum": bson.M{"$divide": bson.A{"$amount_paise", 100}}},
+				}}},
+			},
+		}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":         "$_id",
+			"net_revenue": bson.M{"$sum": "$net_revenue"},
+			"deduction":   bson.M{"$sum": "$deduction"},
+		}}},
+		{{Key: "$project", Value: bson.M{
+			"net_revenue": bson.M{"$max": bson.A{0, "$net_revenue"}},
+			"deduction":   1,
 		}}},
 	})
 	if err != nil {
@@ -504,13 +558,17 @@ func (e *BeauticianCommissionExecutor) getMonthlyRevenueByBeautician(
 
 	for cursor.Next(ctx) {
 		var row struct {
-			ID           primitive.ObjectID `bson:"_id"`
-			TotalRevenue float64            `bson:"total_revenue"`
+			ID         primitive.ObjectID `bson:"_id"`
+			NetRevenue float64            `bson:"net_revenue"`
+			Deduction  float64            `bson:"deduction"`
 		}
 		if err := cursor.Decode(&row); err != nil {
 			return nil, err
 		}
-		revenueByBeautician[row.ID] = row.TotalRevenue
+		revenueByBeautician[row.ID] = beauticianTargetRevenue{
+			NetRevenue: row.NetRevenue,
+			Deduction:  math.Min(0, row.Deduction),
+		}
 	}
 	return revenueByBeautician, cursor.Err()
 }

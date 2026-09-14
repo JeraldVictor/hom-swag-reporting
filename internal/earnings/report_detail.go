@@ -75,12 +75,14 @@ type ReportPayout struct {
 }
 
 type ReportAdjustment struct {
-	ID         primitive.ObjectID  `json:"_id"`
-	PayoutType SettlementBucket    `json:"payout_type"`
-	Date       string              `json:"date"`
-	Amount     float64             `json:"amount"`
-	Reason     string              `json:"reason"`
-	OrderID    *primitive.ObjectID `json:"order_id,omitempty"`
+	ID             primitive.ObjectID  `json:"_id"`
+	PayoutType     SettlementBucket    `json:"payout_type"`
+	Date           string              `json:"date"`
+	Amount         float64             `json:"amount"`
+	Reason         string              `json:"reason"`
+	Component      Component           `json:"component,omitempty"`
+	IdempotencyKey string              `json:"idempotency_key,omitempty"`
+	OrderID        *primitive.ObjectID `json:"order_id,omitempty"`
 }
 
 func (a *API) getReportDetail(w http.ResponseWriter, r *http.Request, officeID string) {
@@ -365,6 +367,7 @@ func reportPayoutsCoveringPeriod(payouts []ReportPayout, startDate, endDate stri
 
 func (r *Repository) loadReportAdjustments(ctx context.Context, officeID, workerID primitive.ObjectID, startDate, endDate string) ([]ReportAdjustment, error) {
 	rows := make([]ReportAdjustment, 0)
+	complaintRowIndexes := make(map[primitive.ObjectID][]int)
 	entries, _, err := r.ListEntries(ctx, LedgerFilter{
 		OfficeID: officeID.Hex(), WorkerID: workerID.Hex(), StartDate: startDate, EndDate: endDate, Page: 1, Limit: 10000,
 	})
@@ -375,10 +378,43 @@ func (r *Repository) loadReportAdjustments(ctx context.Context, officeID, worker
 		if entry.Component != ComponentCommissionAdjustment && entry.Component != ComponentPetrolAdjustment && entry.Component != ComponentComplaintDeduction {
 			continue
 		}
-		rows = append(rows, ReportAdjustment{
+		row := ReportAdjustment{
 			ID: entry.ID, PayoutType: entry.SettlementBucket, Date: entry.ServiceDateKey,
 			Amount: float64(entry.AmountPaise) / 100, Reason: firstNonEmpty(entry.Reason, string(entry.Component)),
-		})
+			Component: entry.Component, IdempotencyKey: entry.IdempotencyKey,
+		}
+		rows = append(rows, row)
+		if complaintID, ok := complaintIDFromAdjustment(entry); ok {
+			complaintRowIndexes[complaintID] = append(complaintRowIndexes[complaintID], len(rows)-1)
+		}
+	}
+	if len(complaintRowIndexes) > 0 {
+		complaintIDs := make([]primitive.ObjectID, 0, len(complaintRowIndexes))
+		for complaintID := range complaintRowIndexes {
+			complaintIDs = append(complaintIDs, complaintID)
+		}
+		type complaintOrderLink struct {
+			ID      primitive.ObjectID `bson:"_id"`
+			OrderID primitive.ObjectID `bson:"order_id"`
+		}
+		cursor, findErr := r.db.Collection("complaints").Find(ctx, bson.M{
+			"_id": bson.M{"$in": complaintIDs}, "office_id": officeID, "is_deleted": bson.M{"$ne": true},
+		}, options.Find().SetProjection(bson.M{"order_id": 1}))
+		if findErr != nil {
+			return nil, findErr
+		}
+		links := make([]complaintOrderLink, 0, len(complaintIDs))
+		if decodeErr := cursor.All(ctx, &links); decodeErr != nil {
+			cursor.Close(ctx)
+			return nil, decodeErr
+		}
+		cursor.Close(ctx)
+		for _, link := range links {
+			for _, rowIndex := range complaintRowIndexes[link.ID] {
+				orderID := link.OrderID
+				rows[rowIndex].OrderID = &orderID
+			}
+		}
 	}
 	start, end, err := reportDateBounds(startDate, endDate)
 	if err != nil {
@@ -412,6 +448,19 @@ func (r *Repository) loadReportAdjustments(ctx context.Context, officeID, worker
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Date > rows[j].Date })
 	return rows, nil
+}
+
+func complaintIDFromAdjustment(entry LedgerEntry) (primitive.ObjectID, bool) {
+	if entry.Component != ComponentComplaintDeduction &&
+		!(entry.Component == ComponentCommissionAdjustment && strings.HasPrefix(entry.IdempotencyKey, "complaint:")) {
+		return primitive.NilObjectID, false
+	}
+	parts := strings.Split(entry.IdempotencyKey, ":")
+	if len(parts) < 2 {
+		return primitive.NilObjectID, false
+	}
+	complaintID, err := primitive.ObjectIDFromHex(parts[1])
+	return complaintID, err == nil
 }
 
 func firstNonEmpty(values ...string) string {

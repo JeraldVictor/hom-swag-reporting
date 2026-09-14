@@ -304,6 +304,22 @@ func TestCreateAdjustmentNegativePathsAndSuccess(t *testing.T) {
 			t.Fatalf("status = %d, entry = %#v", response.Code, store.lastAdjustment)
 		}
 	})
+	t.Run("complaint deduction component", func(t *testing.T) {
+		store := newMockStore()
+		body := `{"worker_id":"` + testWorkerID + `","worker_type":"beautician","bucket":"commission","component":"complaint_deduction","amount_paise":-5000,"service_date":"2026-07-20","reason":"complaint","idempotency_key":"complaint:1:deduction"}`
+		response := performAPIRequest(t, store, http.MethodPost, "/api/earnings/adjustments?office_id="+testOfficeID, body, validTestClaims())
+		if response.Code != 201 || store.lastAdjustment.Component != ComponentComplaintDeduction {
+			t.Fatalf("status = %d, entry = %#v", response.Code, store.lastAdjustment)
+		}
+	})
+	t.Run("complaint deduction must be negative commission", func(t *testing.T) {
+		store := newMockStore()
+		body := `{"worker_id":"` + testWorkerID + `","worker_type":"beautician","bucket":"commission","component":"complaint_deduction","amount_paise":5000,"service_date":"2026-07-20","reason":"complaint","idempotency_key":"complaint:1:deduction"}`
+		response := performAPIRequest(t, store, http.MethodPost, "/api/earnings/adjustments?office_id="+testOfficeID, body, validTestClaims())
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+		}
+	})
 }
 
 func TestClosePeriodAndRebuildPaths(t *testing.T) {

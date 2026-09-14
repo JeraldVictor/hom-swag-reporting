@@ -37,7 +37,7 @@ func TestBeauticianCommissionAuthoritativeUsesLedgerPayables(t *testing.T) {
 				{Key: "total_refund", Value: 10.0}, {Key: "order_count", Value: 3},
 			}),
 			mtest.CreateCursorResponse(0, ordersNamespace, mtest.FirstBatch, bson.D{
-				{Key: "_id", Value: workerID}, {Key: "total_revenue", Value: 250.0},
+				{Key: "_id", Value: workerID}, {Key: "net_revenue", Value: 250.0}, {Key: "deduction", Value: 0.0},
 			}),
 			mtest.CreateCursorResponse(0, officesNamespace, mtest.FirstBatch, bson.D{
 				{Key: "_id", Value: officeID}, {Key: "monthly_target2_bonus", Value: 9.99},
@@ -69,6 +69,56 @@ func TestBeauticianCommissionAuthoritativeUsesLedgerPayables(t *testing.T) {
 		if collection, ok := firstEvent.Command.Lookup("aggregate").StringValueOK(); !ok || collection != "earnings_ledger" {
 			mt.Fatalf("first aggregate collection = %q, want earnings_ledger", collection)
 		}
+	})
+}
+
+func TestBeauticianCommissionComplaintDeductionReducesTargetsAndProjections(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	officeID, workerID := primitive.NewObjectID(), primitive.NewObjectID()
+
+	mt.Run("complaint deductions reduce target revenue before target gates", func(mt *mtest.T) {
+		ledgerNamespace := mt.DB.Name() + ".earnings_ledger"
+		ordersNamespace := mt.DB.Name() + ".orders"
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, ledgerNamespace, mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: workerID}, {Key: "name", Value: "Beauty One"},
+				{Key: "monthly_target1", Value: 240.0}, {Key: "monthly_target2", Value: 300.0},
+				{Key: "special_commission_paise", Value: int64(1000)},
+				{Key: "general_commission_paise", Value: int64(2000)},
+				{Key: "upgrade_commission_paise", Value: int64(3000)},
+				{Key: "target_bonus_paise", Value: int64(500)},
+			}),
+			mtest.CreateCursorResponse(0, ordersNamespace, mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: workerID}, {Key: "name", Value: "Beauty One"},
+				{Key: "monthly_target1", Value: 240.0}, {Key: "monthly_target2", Value: 300.0},
+				{Key: "total_special_commission", Value: 10.0}, {Key: "total_general_commission", Value: 99.0},
+				{Key: "total_upgrade_addon_commission", Value: 30.0}, {Key: "total_revenue", Value: 250.0},
+				{Key: "order_count", Value: 3},
+			}),
+			mtest.CreateCursorResponse(0, ordersNamespace, mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: workerID}, {Key: "net_revenue", Value: 200.0}, {Key: "deduction", Value: -50.0},
+			}),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".offices", mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: officeID}, {Key: "monthly_target2_bonus", Value: 10.0},
+			}),
+		)
+
+		sink := &integrationSink{}
+		err := NewBeauticianCommissionExecutorWithMode(mt.DB, "authoritative").Run(context.Background(), reports.Request{
+			Parameters: map[string]interface{}{
+				"start_date": "2026-07-01", "end_date": "2026-07-31", "office_id": officeID.Hex(),
+			},
+		}, sink)
+		if err != nil {
+			mt.Fatalf("run: %v", err)
+		}
+		assertLedgerReportCell(t, sink.rows, "Total Revenue", "200.00")
+		assertLedgerReportCell(t, sink.rows, "Target 1 Achieved", "No")
+		assertLedgerReportCell(t, sink.rows, "Target 2 Achieved", "No")
+		assertLedgerReportCell(t, sink.rows, "Payable General Commission", "0.00")
+		assertLedgerReportCell(t, sink.rows, "Target 2 Bonus", "0.00")
+		assertLedgerReportCell(t, sink.rows, "Estimated Commission at Target 1", "89.00")
+		assertLedgerReportCell(t, sink.rows, "Estimated Commission at Target 2", "99.00")
 	})
 }
 

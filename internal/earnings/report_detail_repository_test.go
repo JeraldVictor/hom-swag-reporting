@@ -138,6 +138,31 @@ func TestRepositoryReportRows(t *testing.T) {
 			mt.Fatalf("rows=%+v err=%v", rows, err)
 		}
 	})
+	mt.Run("complaint adjustment links affected order", func(mt *mtest.T) {
+		ledgerNS := mt.DB.Name() + "." + ledgerCollection
+		complaintNS := mt.DB.Name() + ".complaints"
+		legacyNS := mt.DB.Name() + ".commissionadjustments"
+		complaintID, orderID := primitive.NewObjectID(), primitive.NewObjectID()
+		mt.AddMockResponses(
+			countResponse(ledgerNS, 1),
+			mtest.CreateCursorResponse(0, ledgerNS, mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: primitive.NewObjectID()},
+				{Key: "component", Value: ComponentComplaintDeduction},
+				{Key: "settlement_bucket", Value: BucketCommission},
+				{Key: "amount_paise", Value: int64(-309800)},
+				{Key: "service_date_key", Value: "2026-07-20"},
+				{Key: "idempotency_key", Value: "complaint:" + complaintID.Hex() + ":deduction"},
+			}),
+			mtest.CreateCursorResponse(0, complaintNS, mtest.FirstBatch, bson.D{
+				{Key: "_id", Value: complaintID}, {Key: "order_id", Value: orderID},
+			}),
+			mtest.CreateCursorResponse(0, legacyNS, mtest.FirstBatch),
+		)
+		rows, err := NewRepository(mt.DB).loadReportAdjustments(context.Background(), officeID, workerID, "2026-07-01", "2026-07-31")
+		if err != nil || len(rows) != 1 || rows[0].OrderID == nil || *rows[0].OrderID != orderID {
+			mt.Fatalf("rows=%+v err=%v", rows, err)
+		}
+	})
 	mt.Run("adjustment errors", func(mt *mtest.T) {
 		repo := NewRepository(mt.DB)
 		mt.AddMockResponses(commandError())

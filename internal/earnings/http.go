@@ -830,6 +830,7 @@ type adjustmentRequest struct {
 	WorkerID       string           `json:"worker_id"`
 	WorkerType     string           `json:"worker_type"`
 	Bucket         SettlementBucket `json:"bucket"`
+	Component      Component        `json:"component,omitempty"`
 	AmountPaise    int64            `json:"amount_paise"`
 	ServiceDate    string           `json:"service_date"`
 	Reason         string           `json:"reason"`
@@ -905,6 +906,13 @@ func (a *API) createAdjustment(w http.ResponseWriter, r *http.Request, principal
 	component := ComponentCommissionAdjustment
 	if input.Bucket == BucketPetrol {
 		component = ComponentPetrolAdjustment
+	}
+	if input.Component != "" {
+		if input.Component != ComponentComplaintDeduction || input.Bucket != BucketCommission || input.AmountPaise >= 0 {
+			writeError(w, http.StatusBadRequest, errors.New("complaint_deduction must be a negative commission adjustment"))
+			return
+		}
+		component = input.Component
 	}
 	entry, created, err := a.repo.CreateAdjustment(r.Context(), LedgerEntry{
 		OfficeID: officeObjectID, WorkerID: workerObjectID, WorkerType: input.WorkerType,
