@@ -91,12 +91,14 @@ func TestBeauticianCommissionComplaintDeductionReducesTargetsAndProjections(t *t
 			mtest.CreateCursorResponse(0, ordersNamespace, mtest.FirstBatch, bson.D{
 				{Key: "_id", Value: workerID}, {Key: "name", Value: "Beauty One"},
 				{Key: "monthly_target1", Value: 240.0}, {Key: "monthly_target2", Value: 300.0},
-				{Key: "total_special_commission", Value: 10.0}, {Key: "total_general_commission", Value: 99.0},
-				{Key: "total_upgrade_addon_commission", Value: 30.0}, {Key: "total_revenue", Value: 250.0},
+				{Key: "total_special_commission", Value: 5.0}, {Key: "total_general_commission", Value: 79.0},
+				{Key: "total_upgrade_addon_commission", Value: 5.0}, {Key: "total_revenue", Value: 200.0},
+				{Key: "issue_special_commission", Value: 5.0}, {Key: "issue_general_commission", Value: 20.0},
+				{Key: "issue_upgrade_addon_commission", Value: 25.0},
 				{Key: "order_count", Value: 3},
 			}),
 			mtest.CreateCursorResponse(0, ordersNamespace, mtest.FirstBatch, bson.D{
-				{Key: "_id", Value: workerID}, {Key: "net_revenue", Value: 200.0}, {Key: "deduction", Value: -50.0},
+				{Key: "_id", Value: workerID}, {Key: "net_revenue", Value: 200.0},
 			}),
 			mtest.CreateCursorResponse(0, mt.DB.Name()+".offices", mtest.FirstBatch, bson.D{
 				{Key: "_id", Value: officeID}, {Key: "monthly_target2_bonus", Value: 10.0},

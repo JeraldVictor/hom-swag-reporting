@@ -16,14 +16,14 @@ func leaderboardCommandError() bson.D {
 func TestMongoStoreBeauticianScores(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 	officeID, workerID, orderID := primitive.NewObjectID(), primitive.NewObjectID(), primitive.NewObjectID()
-	mt.Run("scores subtract non-negative complaint deductions", func(mt *mtest.T) {
+	mt.Run("scores exclude the affected order revenue instead of the entered complaint amount", func(mt *mtest.T) {
 		mt.AddMockResponses(
 			mtest.CreateCursorResponse(0, mt.DB.Name()+".orders", mtest.FirstBatch, bson.D{
 				{Key: "_id", Value: workerID}, {Key: "gross_revenue", Value: 1000.0},
 				{Key: "order_count", Value: 2}, {Key: "order_ids", Value: bson.A{orderID}},
 			}),
 			mtest.CreateCursorResponse(0, mt.DB.Name()+".complaints", mtest.FirstBatch, bson.D{
-				{Key: "_id", Value: workerID}, {Key: "deduction", Value: 1200.0},
+				{Key: "_id", Value: workerID}, {Key: "excluded_revenue", Value: 1200.0},
 			}),
 		)
 		scores, err := NewMongoStore(mt.DB).BeauticianScores(context.Background(), officeID, "2026-07-01", "2026-07-31")

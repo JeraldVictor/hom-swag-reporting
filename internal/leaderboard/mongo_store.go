@@ -52,15 +52,25 @@ func (s *MongoStore) BeauticianScores(ctx context.Context, officeID primitive.Ob
 	for _, row := range rows {
 		orderIDs = append(orderIDs, row.OrderIDs...)
 	}
-	deductions := map[primitive.ObjectID]float64{}
+	excludedRevenue := map[primitive.ObjectID]float64{}
 	if len(orderIDs) > 0 {
 		complaintCursor, err := s.db.Collection("complaints").Aggregate(ctx, mongo.Pipeline{
 			{{Key: "$match", Value: bson.M{
-				"office_id": officeID, "order_id": bson.M{"$in": orderIDs}, "status": "closed", "is_deleted": bson.M{"$ne": true},
+				"office_id": officeID, "order_id": bson.M{"$in": orderIDs}, "status": bson.M{"$in": bson.A{"resolved", "closed"}}, "is_deleted": bson.M{"$ne": true},
 			}}},
-			{{Key: "$unwind", Value: "$activity_log"}},
-			{{Key: "$match", Value: bson.M{"activity_log.resolution_type": "beautician_deduction"}}},
-			{{Key: "$group", Value: bson.M{"_id": "$target_id", "deduction": bson.M{"$sum": bson.M{"$ifNull": bson.A{"$activity_log.amount", 0}}}}}},
+			{{Key: "$match", Value: bson.M{"activity_log": bson.M{"$elemMatch": bson.M{"resolution_type": "beautician_deduction"}}}}},
+			{{Key: "$group", Value: bson.M{"_id": bson.M{"worker_id": "$target_id", "order_id": "$order_id"}}}},
+			{{Key: "$lookup", Value: bson.M{"from": "orders", "localField": "_id.order_id", "foreignField": "_id", "as": "order"}}},
+			{{Key: "$unwind", Value: "$order"}},
+			{{Key: "$match", Value: bson.M{"$expr": bson.M{"$eq": bson.A{"$order.beautician_id", "$_id.worker_id"}}}}},
+			{{Key: "$group", Value: bson.M{
+				"_id": "$_id.worker_id",
+				"excluded_revenue": bson.M{"$sum": bson.M{"$max": bson.A{0, bson.M{"$ifNull": bson.A{
+					"$order.order_cost", bson.M{"$ifNull": bson.A{"$order.revenue", bson.M{"$subtract": bson.A{
+						bson.M{"$ifNull": bson.A{"$order.subtotal", 0}}, bson.M{"$ifNull": bson.A{"$order.discount_total", 0}},
+					}}}},
+				}}}}},
+			}}},
 		})
 		if err != nil {
 			return nil, err
@@ -68,20 +78,20 @@ func (s *MongoStore) BeauticianScores(ctx context.Context, officeID primitive.Ob
 		defer complaintCursor.Close(ctx)
 		var deductionRows []struct {
 			WorkerID primitive.ObjectID `bson:"_id"`
-			Amount   float64            `bson:"deduction"`
+			Amount   float64            `bson:"excluded_revenue"`
 		}
 		if err := complaintCursor.All(ctx, &deductionRows); err != nil {
 			return nil, err
 		}
 		for _, row := range deductionRows {
-			deductions[row.WorkerID] = max(0, row.Amount)
+			excludedRevenue[row.WorkerID] = max(0, row.Amount)
 		}
 	}
 	scores := make([]SourceScore, 0, len(rows))
 	for _, row := range rows {
 		scores = append(scores, SourceScore{
 			WorkerID: row.WorkerID, Count: row.OrderCount,
-			Amount: max(0, row.GrossRevenue-deductions[row.WorkerID]),
+			Amount: max(0, row.GrossRevenue-excludedRevenue[row.WorkerID]),
 		})
 	}
 	return scores, nil

@@ -98,25 +98,26 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
+		commissionIssueLookupStage(),
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
-			"total_special_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
+			"total_special_commission": bson.M{"$sum": eligibleCompletedExpr(bson.M{"$ifNull": bson.A{
 				"$commission_snapshot.special_commission",
 				"$commission_details.special_commission",
 				0,
 			}})},
-			"total_general_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
+			"total_general_commission": bson.M{"$sum": eligibleCompletedExpr(bson.M{"$ifNull": bson.A{
 				"$commission_snapshot.general_commission",
 				"$commission_details.general_commission",
 				0,
 			}})},
-			"total_upgrade_addon_commission": bson.M{"$sum": completedOnlyExpr(bson.M{"$ifNull": bson.A{
+			"total_upgrade_addon_commission": bson.M{"$sum": eligibleCompletedExpr(bson.M{"$ifNull": bson.A{
 				"$commission_snapshot.upgrade_addon_commission",
 				"$commission_details.upgrade_addon_commission",
 				0,
 			}})},
 			"total_revenue": bson.M{
-				"$sum": completedOnlyExpr(bson.M{
+				"$sum": eligibleCompletedExpr(bson.M{
 					"$ifNull": bson.A{
 						"$commission_snapshot.order_cost",
 						"$order_cost",
@@ -124,6 +125,15 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 					},
 				}),
 			},
+			"issue_special_commission": bson.M{"$sum": issueCompletedExpr(bson.M{"$ifNull": bson.A{
+				"$commission_snapshot.special_commission", "$commission_details.special_commission", 0,
+			}})},
+			"issue_general_commission": bson.M{"$sum": issueCompletedExpr(bson.M{"$ifNull": bson.A{
+				"$commission_snapshot.general_commission", "$commission_details.general_commission", 0,
+			}})},
+			"issue_upgrade_addon_commission": bson.M{"$sum": issueCompletedExpr(bson.M{"$ifNull": bson.A{
+				"$commission_snapshot.upgrade_addon_commission", "$commission_details.upgrade_addon_commission", 0,
+			}})},
 			"total_refund": bson.M{"$sum": paymentRefundExpr()},
 			"order_count":  bson.M{"$sum": completedOnlyExpr(1)},
 		}}},
@@ -144,6 +154,9 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		"total_special_commission":       1,
 		"total_general_commission":       1,
 		"total_upgrade_addon_commission": 1,
+		"issue_special_commission":       1,
+		"issue_general_commission":       1,
+		"issue_upgrade_addon_commission": 1,
 		"total_revenue":                  1,
 		"total_refund":                   1,
 		"order_count":                    1,
@@ -282,9 +295,10 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		leaderboard := leaderboardByBeautician[result.ID]
 		if mode == "authoritative" {
 			ledger := ledgerByBeautician[result.ID]
-			result.TotalSpecialCommission = paiseToMoney(ledger.SpecialCommissionPaise)
-			payableGeneralCommission = paiseToMoney(ledger.GeneralCommissionPaise)
-			result.TotalUpgradeAddonCommission = paiseToMoney(ledger.UpgradeCommissionPaise)
+			result.TotalSpecialCommission = math.Max(0, paiseToMoney(ledger.SpecialCommissionPaise)-result.IssueSpecialCommission)
+			payableGeneralCommission = math.Max(0, paiseToMoney(ledger.GeneralCommissionPaise)-result.IssueGeneralCommission)
+			result.TotalGeneralCommission = math.Max(0, result.TotalGeneralCommission)
+			result.TotalUpgradeAddonCommission = math.Max(0, paiseToMoney(ledger.UpgradeCommissionPaise)-result.IssueUpgradeAddonCommission)
 			payableTarget2Bonus = paiseToMoney(ledger.TargetBonusPaise)
 			if !target1Achieved {
 				payableGeneralCommission = 0
@@ -303,22 +317,19 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 				payableTarget2Bonus +
 				leaderboard.Bonus,
 		)
-		currentAfterTargetDeduction := math.Max(0, roundPayment(totalCommission+targetRevenue.Deduction))
-		estimatedTarget1Commission := math.Max(currentAfterTargetDeduction, math.Max(0, roundPayment(
+		estimatedTarget1Commission := math.Max(totalCommission, math.Max(0, roundPayment(
 			result.TotalSpecialCommission+
 				result.TotalGeneralCommission+
 				result.TotalUpgradeAddonCommission+
 				payableTarget2Bonus+
-				leaderboard.Bonus+
-				targetRevenue.Deduction,
+				leaderboard.Bonus,
 		)))
 		estimatedTarget2Commission := math.Max(estimatedTarget1Commission, math.Max(0, roundPayment(
 			result.TotalSpecialCommission+
 				result.TotalGeneralCommission+
 				result.TotalUpgradeAddonCommission+
 				target2Bonus+
-				leaderboard.Bonus+
-				targetRevenue.Deduction,
+				leaderboard.Bonus,
 		)))
 		reportedRevenue := result.TotalRevenue
 		if startDateKey == monthStart.Format("2006-01-02") && endDateKey == monthEnd.Format("2006-01-02") {
@@ -361,6 +372,9 @@ type beauticianCommissionRow struct {
 	TotalSpecialCommission      float64            `bson:"total_special_commission"`
 	TotalGeneralCommission      float64            `bson:"total_general_commission"`
 	TotalUpgradeAddonCommission float64            `bson:"total_upgrade_addon_commission"`
+	IssueSpecialCommission      float64            `bson:"issue_special_commission"`
+	IssueGeneralCommission      float64            `bson:"issue_general_commission"`
+	IssueUpgradeAddonCommission float64            `bson:"issue_upgrade_addon_commission"`
 	TotalRevenue                float64            `bson:"total_revenue"`
 	TotalRefund                 float64            `bson:"total_refund"`
 	OrderCount                  int                `bson:"order_count"`
@@ -474,6 +488,40 @@ func completedOnlyExpr(value interface{}) bson.M {
 	return bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$status", "completed"}}, value, 0}}
 }
 
+func commissionIssueLookupStage() bson.D {
+	return bson.D{{Key: "$lookup", Value: bson.M{
+		"from": "complaints",
+		"let":  bson.M{"order_id": "$_id", "beautician_id": "$beautician_id"},
+		"pipeline": mongo.Pipeline{
+			{{Key: "$match", Value: bson.M{
+				"$expr": bson.M{"$and": bson.A{
+					bson.M{"$eq": bson.A{"$order_id", "$$order_id"}},
+					bson.M{"$eq": bson.A{"$target_id", "$$beautician_id"}},
+					bson.M{"$in": bson.A{"$status", bson.A{"resolved", "closed"}}},
+					bson.M{"$ne": bson.A{"$is_deleted", true}},
+				}},
+			}}},
+			{{Key: "$match", Value: bson.M{"activity_log": bson.M{"$elemMatch": bson.M{"resolution_type": "beautician_deduction"}}}}},
+			{{Key: "$limit", Value: 1}},
+		},
+		"as": "commission_issue",
+	}}}
+}
+
+func eligibleCompletedExpr(value interface{}) bson.M {
+	return bson.M{"$cond": bson.A{bson.M{"$and": bson.A{
+		bson.M{"$eq": bson.A{"$status", "completed"}},
+		bson.M{"$eq": bson.A{bson.M{"$size": "$commission_issue"}, 0}},
+	}}, value, 0}}
+}
+
+func issueCompletedExpr(value interface{}) bson.M {
+	return bson.M{"$cond": bson.A{bson.M{"$and": bson.A{
+		bson.M{"$eq": bson.A{"$status", "completed"}},
+		bson.M{"$gt": bson.A{bson.M{"$size": "$commission_issue"}, 0}},
+	}}, value, 0}}
+}
+
 type beauticianLeaderboardBonus struct {
 	Rank  int
 	Bonus float64
@@ -481,7 +529,6 @@ type beauticianLeaderboardBonus struct {
 
 type beauticianTargetRevenue struct {
 	NetRevenue float64
-	Deduction  float64
 }
 
 func (e *BeauticianCommissionExecutor) getMonthlyTargetRevenueByBeautician(
@@ -505,50 +552,19 @@ func (e *BeauticianCommissionExecutor) getMonthlyTargetRevenueByBeautician(
 		match["office_id"] = officeID
 	}
 
-	ledgerMatch := bson.M{
-		"worker_type": "beautician", "worker_id": bson.M{"$in": beauticianIDs},
-		"settlement_bucket": "commission", "status": bson.M{"$ne": "void"},
-		"service_date_key": bson.M{"$gte": startDateKey, "$lte": endDateKey},
-		"amount_paise":     bson.M{"$lt": 0},
-		"$or": bson.A{
-			bson.M{"component": "complaint_deduction"},
-			bson.M{"component": "commission_adjustment", "idempotency_key": bson.M{"$regex": "^complaint:"}},
-		},
-	}
-	if !officeID.IsZero() {
-		ledgerMatch["office_id"] = officeID
-	}
-
 	cursor, err := e.db.Collection("orders").Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: match}},
+		commissionIssueLookupStage(),
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
-			"net_revenue": bson.M{"$sum": bson.M{"$ifNull": bson.A{
+			"net_revenue": bson.M{"$sum": eligibleCompletedExpr(bson.M{"$ifNull": bson.A{
 				"$commission_snapshot.order_cost",
 				"$order_cost",
 				"$revenue",
-			}}},
-			"deduction": bson.M{"$sum": 0},
-		}}},
-		{{Key: "$unionWith", Value: bson.M{
-			"coll": "earnings_ledger",
-			"pipeline": mongo.Pipeline{
-				{{Key: "$match", Value: ledgerMatch}},
-				{{Key: "$group", Value: bson.M{
-					"_id":         "$worker_id",
-					"net_revenue": bson.M{"$sum": bson.M{"$divide": bson.A{"$amount_paise", 100}}},
-					"deduction":   bson.M{"$sum": bson.M{"$divide": bson.A{"$amount_paise", 100}}},
-				}}},
-			},
-		}}},
-		{{Key: "$group", Value: bson.M{
-			"_id":         "$_id",
-			"net_revenue": bson.M{"$sum": "$net_revenue"},
-			"deduction":   bson.M{"$sum": "$deduction"},
+			}})},
 		}}},
 		{{Key: "$project", Value: bson.M{
 			"net_revenue": bson.M{"$max": bson.A{0, "$net_revenue"}},
-			"deduction":   1,
 		}}},
 	})
 	if err != nil {
@@ -560,14 +576,12 @@ func (e *BeauticianCommissionExecutor) getMonthlyTargetRevenueByBeautician(
 		var row struct {
 			ID         primitive.ObjectID `bson:"_id"`
 			NetRevenue float64            `bson:"net_revenue"`
-			Deduction  float64            `bson:"deduction"`
 		}
 		if err := cursor.Decode(&row); err != nil {
 			return nil, err
 		}
 		revenueByBeautician[row.ID] = beauticianTargetRevenue{
 			NetRevenue: row.NetRevenue,
-			Deduction:  math.Min(0, row.Deduction),
 		}
 	}
 	return revenueByBeautician, cursor.Err()
