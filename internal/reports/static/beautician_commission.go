@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/JeraldVictor/hom-swag-reporting/internal/dateutil"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
 	"go.mongodb.org/mongo-driver/bson"
@@ -244,7 +245,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 	}
 	leaderboardByBeautician := map[primitive.ObjectID]beauticianLeaderboardBonus{}
 	if mode != "authoritative" {
-		leaderboardByBeautician, err = e.getLeaderboardBonusByBeautician(ctx, officeID, startDate, endDate)
+		leaderboardByBeautician, err = e.getLeaderboardBonusByBeautician(ctx, officeID, startDateKey, endDateKey)
 		if err != nil {
 			return err
 		}
@@ -590,18 +591,22 @@ func (e *BeauticianCommissionExecutor) getMonthlyTargetRevenueByBeautician(
 func (e *BeauticianCommissionExecutor) getLeaderboardBonusByBeautician(
 	ctx context.Context,
 	officeID primitive.ObjectID,
-	startDate time.Time,
-	endDate time.Time,
+	startDate string,
+	endDate string,
 ) (map[primitive.ObjectID]beauticianLeaderboardBonus, error) {
 	bonusByBeautician := map[primitive.ObjectID]beauticianLeaderboardBonus{}
 	if officeID.IsZero() {
 		return bonusByBeautician, nil
 	}
+	startInstant, endInstant, err := dateutil.ISTDayRange(startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
 
 	cursor, err := e.db.Collection("leaderboards").Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
 			"office_id": officeID,
-			"date":      bson.M{"$gte": startDate, "$lte": endDate},
+			"date":      bson.M{"$gte": startInstant, "$lte": endInstant},
 		}}},
 		{{Key: "$group", Value: bson.M{
 			"_id":         "$beautician_id",

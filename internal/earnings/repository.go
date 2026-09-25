@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/JeraldVictor/hom-swag-reporting/internal/dateutil"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/payables"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -268,16 +269,12 @@ func (r *Repository) LoadTarget2Bonus(ctx context.Context, officeID primitive.Ob
 }
 
 func (r *Repository) LoadBeauticianLeaderboardSources(ctx context.Context, officeID primitive.ObjectID, startDate, endDate string) ([]BeauticianLeaderboardSource, error) {
-	start, err := time.Parse("2006-01-02", startDate)
-	if err != nil {
-		return nil, err
-	}
-	end, err := time.Parse("2006-01-02", endDate)
+	start, end, err := dateutil.ISTDayRange(startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
 	cursor, err := r.db.Collection("leaderboards").Aggregate(ctx, mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"office_id": officeID, "date": bson.M{"$gte": start, "$lte": end.Add(24*time.Hour - time.Nanosecond)}}}},
+		{{Key: "$match", Value: bson.M{"office_id": officeID, "date": bson.M{"$gte": start, "$lte": end}}}},
 		{{Key: "$group", Value: bson.M{"_id": "$beautician_id", "revenue": bson.M{"$sum": "$revenue"}, "order_count": bson.M{"$sum": "$order_count"}}}},
 	})
 	if err != nil {

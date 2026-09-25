@@ -15,7 +15,7 @@ import (
 
 var ErrNoQueuedRebuild = errors.New("no queued earnings rebuild")
 
-const leaderboardCalculationVersion = 2
+const leaderboardCalculationVersion = 3
 
 type CommissionSnapshot struct {
 	OrderCost              *float64  `bson:"order_cost"`
