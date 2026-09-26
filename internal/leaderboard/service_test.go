@@ -105,7 +105,7 @@ func TestServiceAdminBeauticianRanking(t *testing.T) {
 	}
 }
 
-func TestServiceFieldMaskingAndRiderRestriction(t *testing.T) {
+func TestServiceFieldTopFiveRestriction(t *testing.T) {
 	ids := make([]primitive.ObjectID, 7)
 	beauticianStore := &mockLeaderboardStore{prizes: PrizeSchedule{Beautician: []float64{100}}}
 	for index := range ids {
@@ -116,11 +116,11 @@ func TestServiceFieldMaskingAndRiderRestriction(t *testing.T) {
 	response, err := NewService(beauticianStore).Get(context.Background(), Query{
 		OfficeID: primitive.NewObjectID(), Period: "monthly", Role: "beautician", Gender: "all", ViewerID: ids[5], Field: true, Now: time.Now(),
 	})
-	if err != nil || len(response.Entries) != 7 || response.SelfEntry == nil || response.SelfEntry.Rank != 6 {
+	if err != nil || len(response.Entries) != 5 || !response.IsRestricted || response.SelfEntry == nil || response.SelfEntry.Rank != 6 {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	if response.Entries[5].UserID == "masked" || response.Entries[6].UserID != "masked" || response.Entries[6].Name != "Masked User" || response.Entries[6].Photo != nil {
-		t.Fatalf("masking failed: %#v %#v", response.Entries[5], response.Entries[6])
+	if response.Entries[4].Rank != 5 || response.Entries[4].UserID != ids[4].Hex() {
+		t.Fatalf("unexpected fifth entry: %#v", response.Entries[4])
 	}
 
 	riderStore := &mockLeaderboardStore{prizes: PrizeSchedule{Rider: []float64{30, 20, 10}}}
@@ -131,7 +131,7 @@ func TestServiceFieldMaskingAndRiderRestriction(t *testing.T) {
 	riderResponse, err := NewService(riderStore).Get(context.Background(), Query{
 		OfficeID: primitive.NewObjectID(), Period: "weekly", Role: "rider", ViewerID: ids[4], Field: true, Now: time.Now(),
 	})
-	if err != nil || len(riderResponse.Entries) != 3 || !riderResponse.IsRestricted || riderResponse.SelfEntry == nil || riderResponse.SelfEntry.Rank != 5 || riderResponse.SelfEntry.Score != 1 {
+	if err != nil || len(riderResponse.Entries) != 5 || !riderResponse.IsRestricted || riderResponse.SelfEntry == nil || riderResponse.SelfEntry.Rank != 5 || riderResponse.SelfEntry.Score != 1 {
 		t.Fatalf("rider response=%#v err=%v", riderResponse, err)
 	}
 }

@@ -151,7 +151,7 @@ func (s *Service) Get(ctx context.Context, query Query) (Response, error) {
 		}
 		return response, nil
 	}
-	response.IsRestricted = query.Role == "rider"
+	response.IsRestricted = true
 	for index := range entries {
 		if entries[index].IsSelf {
 			self := entries[index]
@@ -159,19 +159,8 @@ func (s *Service) Get(ctx context.Context, query Query) (Response, error) {
 			break
 		}
 	}
-	if query.Role == "rider" {
-		if len(response.Entries) > 3 {
-			response.Entries = response.Entries[:3]
-		}
-		return response, nil
-	}
-	for index := range response.Entries {
-		if response.Entries[index].Rank > 5 && !response.Entries[index].IsSelf {
-			response.Entries[index].UserID = "masked"
-			response.Entries[index].Name = "Masked User"
-			response.Entries[index].Photo = nil
-			response.Entries[index].PhotoURL = ""
-		}
+	if len(response.Entries) > 5 {
+		response.Entries = response.Entries[:5]
 	}
 	return response, nil
 }
