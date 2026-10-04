@@ -156,6 +156,7 @@ func (e *RiderCommissionExecutor) Run(ctx context.Context, req reports.Request, 
 		bson.D{{Key: "$project", Value: bson.M{
 			"name":               bson.M{"$ifNull": bson.A{"$rider.name", "$beautician.name"}},
 			"emp_code":           bson.M{"$ifNull": bson.A{"$rider.emp_code", "$beautician.emp_code"}},
+			"gender":             bson.M{"$ifNull": bson.A{"$rider.gender", "$beautician.gender"}},
 			"total_distance_km":  1,
 			"petrol_payable":     1,
 			"commission_payable": 1,
@@ -414,6 +415,12 @@ func (e *RiderCommissionExecutor) loadRiderRankingRows(ctx context.Context, matc
 			"_id": "$allowance_worker_id", "total_distance_km": bson.M{"$sum": "$payable_distance_km"}, "trip_count": bson.M{"$sum": 1},
 		}}},
 		{{Key: "$match", Value: bson.M{"_id": bson.M{"$ne": nil}}}},
+		{{Key: "$lookup", Value: bson.M{"from": "riders", "localField": "_id", "foreignField": "_id", "as": "rider"}}},
+		{{Key: "$lookup", Value: bson.M{"from": "beauticians", "localField": "_id", "foreignField": "_id", "as": "beautician"}}},
+		{{Key: "$addFields", Value: bson.M{"gender": bson.M{"$ifNull": bson.A{
+			bson.M{"$arrayElemAt": bson.A{"$rider.gender", 0}},
+			bson.M{"$arrayElemAt": bson.A{"$beautician.gender", 0}},
+		}}}}},
 	}
 	cursor, err := e.db.Collection("trips").Aggregate(ctx, pipeline)
 	if err != nil {
@@ -432,13 +439,19 @@ func (e *RiderCommissionExecutor) loadRiderRankingRows(ctx context.Context, matc
 }
 
 func rankRiderRows(rows map[primitive.ObjectID]riderCommissionRow) map[primitive.ObjectID]int {
-	scores := make([]leaderboard.RiderScore, 0, len(rows))
+	scores := map[string][]leaderboard.RiderScore{"female": {}, "male": {}, "other": {}}
 	for _, row := range rows {
-		scores = append(scores, leaderboard.RiderScore{WorkerID: row.ID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
+		gender := row.Gender
+		if gender != "male" && gender != "other" {
+			gender = "female"
+		}
+		scores[gender] = append(scores[gender], leaderboard.RiderScore{WorkerID: row.ID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
 	}
-	ranks := make(map[primitive.ObjectID]int, len(scores))
-	for _, award := range leaderboard.RankRiders(scores, nil) {
-		ranks[award.WorkerID] = award.Rank
+	ranks := make(map[primitive.ObjectID]int, len(rows))
+	for _, gender := range []string{"female", "male", "other"} {
+		for _, award := range leaderboard.RankRiders(scores[gender], nil) {
+			ranks[award.WorkerID] = award.Rank
+		}
 	}
 	return ranks
 }
@@ -459,6 +472,7 @@ type riderCommissionRow struct {
 	TotalDistanceKM   float64            `bson:"total_distance_km"`
 	PetrolPayable     float64            `bson:"petrol_payable"`
 	CommissionPayable float64            `bson:"commission_payable"`
+	Gender            string             `bson:"gender"`
 }
 
 func (e *RiderCommissionExecutor) getLeaderboardBonusByRider(
@@ -476,12 +490,24 @@ func (e *RiderCommissionExecutor) getLeaderboardBonusByRider(
 		return nil, err
 	}
 
-	scores := make([]leaderboard.RiderScore, len(rows))
-	for index, row := range rows {
-		scores[index] = leaderboard.RiderScore{WorkerID: row.ID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM}
-	}
-	for _, award := range leaderboard.RankRiders(scores, prizes) {
-		bonusByRider[award.WorkerID] = riderLeaderboardBonus{Rank: award.Rank, Bonus: award.Bonus}
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.RiderPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		scores := make([]leaderboard.RiderScore, 0)
+		for _, row := range rows {
+			rowGender := row.Gender
+			if rowGender != "male" && rowGender != "other" {
+				rowGender = "female"
+			}
+			if rowGender == gender {
+				scores = append(scores, leaderboard.RiderScore{WorkerID: row.ID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
+			}
+		}
+		for _, award := range leaderboard.RankRiders(scores, genderPrizes) {
+			bonusByRider[award.WorkerID] = riderLeaderboardBonus{Rank: award.Rank, Bonus: award.Bonus}
+		}
 	}
 	return bonusByRider, nil
 }
@@ -491,17 +517,18 @@ type riderLeaderboardBonus struct {
 	Bonus float64
 }
 
-func (e *RiderCommissionExecutor) getRiderLeaderboardPrizes(ctx context.Context, officeID primitive.ObjectID) ([]float64, error) {
+func (e *RiderCommissionExecutor) getRiderLeaderboardPrizes(ctx context.Context, officeID primitive.ObjectID) (leaderboard.PrizeSchedule, error) {
 	var office struct {
 		LeaderboardPrizes struct {
 			Rider []float64 `bson:"rider"`
 		} `bson:"leaderboard_prizes"`
+		RiderCommissionSettings leaderboard.BeauticianCommissionSettings `bson:"rider_commission_settings"`
 	}
 	err := e.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}).Decode(&office)
 	if err == mongo.ErrNoDocuments {
-		return nil, nil
+		return leaderboard.PrizeSchedule{}, nil
 	}
-	return office.LeaderboardPrizes.Rider, err
+	return leaderboard.PrizeSchedule{Rider: office.LeaderboardPrizes.Rider, RiderByGender: office.RiderCommissionSettings}, err
 }
 
 func parseReportDate(value string, endOfDay bool) (time.Time, error) {

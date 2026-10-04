@@ -105,6 +105,70 @@ func TestServiceAdminBeauticianRanking(t *testing.T) {
 	}
 }
 
+func TestServiceRanksBeauticiansWithinGenderAndHonorsBonusSwitch(t *testing.T) {
+	female, male := primitive.NewObjectID(), primitive.NewObjectID()
+	disabled := false
+	enabled := true
+	store := &mockLeaderboardStore{
+		beauticianScores: []SourceScore{
+			{WorkerID: female, Count: 1, Amount: 100},
+			{WorkerID: male, Count: 1, Amount: 1000},
+		},
+		profiles: []Profile{
+			{WorkerID: female, Name: "Female", Gender: "female"},
+			{WorkerID: male, Name: "Male", Gender: "male"},
+		},
+		prizes: PrizeSchedule{BeauticianByGender: BeauticianCommissionSettings{
+			Female: GenderCommissionSettings{LeaderboardBonusEnabled: &enabled, LeaderboardPrizes: []float64{500}},
+			Male:   GenderCommissionSettings{LeaderboardBonusEnabled: &disabled, LeaderboardPrizes: []float64{900}},
+		}},
+	}
+	response, err := NewService(store).Get(context.Background(), Query{
+		OfficeID: primitive.NewObjectID(), Period: "monthly", Role: "beautician", Gender: "all", Now: time.Now(),
+	})
+	if err != nil || len(response.Entries) != 2 {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if response.Entries[0].UserID != female.Hex() || response.Entries[0].Rank != 1 || response.Entries[0].Prize != 500 {
+		t.Fatalf("female entry=%#v", response.Entries[0])
+	}
+	if response.Entries[1].UserID != male.Hex() || response.Entries[1].Rank != 1 || response.Entries[1].Prize != 0 {
+		t.Fatalf("male entry=%#v", response.Entries[1])
+	}
+}
+
+func TestServiceRanksRidersWithinGenderAndHonorsBonusSwitch(t *testing.T) {
+	female, male := primitive.NewObjectID(), primitive.NewObjectID()
+	disabled := false
+	enabled := true
+	store := &mockLeaderboardStore{
+		riderScores: []SourceScore{
+			{WorkerID: female, Count: 2, Amount: 20},
+			{WorkerID: male, Count: 9, Amount: 90},
+		},
+		profiles: []Profile{
+			{WorkerID: female, Name: "Female Rider", Gender: "female"},
+			{WorkerID: male, Name: "Male Rider", Gender: "male"},
+		},
+		prizes: PrizeSchedule{RiderByGender: BeauticianCommissionSettings{
+			Female: GenderCommissionSettings{LeaderboardBonusEnabled: &enabled, LeaderboardPrizes: []float64{250}},
+			Male:   GenderCommissionSettings{LeaderboardBonusEnabled: &disabled, LeaderboardPrizes: []float64{450}},
+		}},
+	}
+	response, err := NewService(store).Get(context.Background(), Query{
+		OfficeID: primitive.NewObjectID(), Period: "monthly", Role: "rider", Gender: "all", Now: time.Now(),
+	})
+	if err != nil || len(response.Entries) != 2 {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if response.Entries[0].UserID != female.Hex() || response.Entries[0].Rank != 1 || response.Entries[0].Prize != 250 {
+		t.Fatalf("female rider entry=%#v", response.Entries[0])
+	}
+	if response.Entries[1].UserID != male.Hex() || response.Entries[1].Rank != 1 || response.Entries[1].Prize != 0 {
+		t.Fatalf("male rider entry=%#v", response.Entries[1])
+	}
+}
+
 func TestServiceFieldTopFiveRestriction(t *testing.T) {
 	ids := make([]primitive.ObjectID, 7)
 	beauticianStore := &mockLeaderboardStore{prizes: PrizeSchedule{Beautician: []float64{100}}}

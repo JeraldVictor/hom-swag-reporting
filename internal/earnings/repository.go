@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/dateutil"
+	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
 	"github.com/JeraldVictor/hom-swag-reporting/internal/payables"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -291,7 +292,7 @@ func (r *Repository) LoadBeauticianLeaderboardSources(ctx context.Context, offic
 				primitive.NewDateTimeFromTime(time.Unix(0, 0).UTC()),
 			}},
 		}}}}},
-		{{Key: "$group", Value: bson.M{"_id": "$beautician_id", "revenue": bson.M{"$sum": "$revenue"}, "order_count": bson.M{"$sum": "$order_count"}}}},
+		{{Key: "$group", Value: bson.M{"_id": "$beautician_id", "revenue": bson.M{"$sum": "$revenue"}, "order_count": bson.M{"$sum": "$order_count"}, "gender": bson.M{"$first": "$commission_beautician.gender"}}}},
 	})
 	if err != nil {
 		return nil, err
@@ -310,7 +311,15 @@ func (r *Repository) LoadRiderLeaderboardSources(ctx context.Context, officeID p
 		{{Key: "$match", Value: match}},
 		{{Key: "$addFields", Value: bson.M{"allowance_worker_id": workerExpr, "payable_distance_km": distanceExpr, "allowance_worker_type": payables.AllowanceWorkerTypeExpr()}}},
 		{{Key: "$match", Value: bson.M{"allowance_worker_id": bson.M{"$ne": nil}}}},
-		{{Key: "$group", Value: bson.M{"_id": "$allowance_worker_id", "worker_type": bson.M{"$first": "$allowance_worker_type"}, "trip_count": bson.M{"$sum": 1}, "total_distance_km": bson.M{"$sum": "$payable_distance_km"}}}},
+		{{Key: "$lookup", Value: bson.M{"from": "riders", "localField": "allowance_worker_id", "foreignField": "_id", "as": "rider_profile"}}},
+		{{Key: "$lookup", Value: bson.M{"from": "beauticians", "localField": "allowance_worker_id", "foreignField": "_id", "as": "beautician_profile"}}},
+		{{Key: "$addFields", Value: bson.M{
+			"worker_gender": bson.M{"$ifNull": bson.A{
+				bson.M{"$arrayElemAt": bson.A{"$rider_profile.gender", 0}},
+				bson.M{"$arrayElemAt": bson.A{"$beautician_profile.gender", 0}},
+			}},
+		}}},
+		{{Key: "$group", Value: bson.M{"_id": "$allowance_worker_id", "worker_type": bson.M{"$first": "$allowance_worker_type"}, "gender": bson.M{"$first": "$worker_gender"}, "trip_count": bson.M{"$sum": 1}, "total_distance_km": bson.M{"$sum": "$payable_distance_km"}}}},
 	})
 	if err != nil {
 		return nil, err
@@ -326,12 +335,14 @@ func (r *Repository) LoadLeaderboardPrizes(ctx context.Context, officeID primiti
 			Beautician []float64 `bson:"beutician"`
 			Rider      []float64 `bson:"rider"`
 		} `bson:"leaderboard_prizes"`
+		BeauticianCommissionSettings leaderboard.BeauticianCommissionSettings `bson:"beautician_commission_settings"`
+		RiderCommissionSettings      leaderboard.BeauticianCommissionSettings `bson:"rider_commission_settings"`
 	}
-	err := r.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}, options.FindOne().SetProjection(bson.M{"leaderboard_prizes": 1})).Decode(&office)
+	err := r.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}, options.FindOne().SetProjection(bson.M{"leaderboard_prizes": 1, "beautician_commission_settings": 1, "rider_commission_settings": 1})).Decode(&office)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return LeaderboardPrizes{}, nil
 	}
-	return LeaderboardPrizes{Beautician: office.LeaderboardPrizes.Beautician, Rider: office.LeaderboardPrizes.Rider}, err
+	return LeaderboardPrizes{Beautician: office.LeaderboardPrizes.Beautician, Rider: office.LeaderboardPrizes.Rider, BeauticianByGender: office.BeauticianCommissionSettings, RiderByGender: office.RiderCommissionSettings}, err
 }
 
 func (r *Repository) PutSourceEntry(ctx context.Context, entry LedgerEntry) (LedgerEntry, bool, error) {

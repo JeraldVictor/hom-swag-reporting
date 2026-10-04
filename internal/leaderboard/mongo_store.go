@@ -152,11 +152,15 @@ func (s *MongoStore) Profiles(ctx context.Context, role string, workerIDs []prim
 
 func (s *MongoStore) Prizes(ctx context.Context, officeID primitive.ObjectID) (PrizeSchedule, error) {
 	var office struct {
-		Prizes PrizeSchedule `bson:"leaderboard_prizes"`
+		Prizes             PrizeSchedule                `bson:"leaderboard_prizes"`
+		BeauticianByGender BeauticianCommissionSettings `bson:"beautician_commission_settings"`
+		RiderByGender      BeauticianCommissionSettings `bson:"rider_commission_settings"`
 	}
-	err := s.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}, options.FindOne().SetProjection(bson.M{"leaderboard_prizes": 1})).Decode(&office)
+	err := s.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}, options.FindOne().SetProjection(bson.M{"leaderboard_prizes": 1, "beautician_commission_settings": 1, "rider_commission_settings": 1})).Decode(&office)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return PrizeSchedule{}, nil
 	}
+	office.Prizes.BeauticianByGender = office.BeauticianByGender
+	office.Prizes.RiderByGender = office.RiderByGender
 	return office.Prizes, err
 }

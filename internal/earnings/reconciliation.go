@@ -188,7 +188,7 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 		}
 	}
 
-	beauticianScores := make([]leaderboard.BeauticianScore, 0, len(beauticians))
+	beauticianScores := map[string][]leaderboard.BeauticianScore{"female": {}, "male": {}, "other": {}}
 	seenBeauticians := map[primitive.ObjectID]struct{}{}
 	for _, row := range beauticians {
 		if row.WorkerID.IsZero() || !validMoney(row.Revenue) || row.OrderCount < 0 {
@@ -198,12 +198,22 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 			return result, errors.New("duplicate beautician leaderboard aggregate")
 		}
 		seenBeauticians[row.WorkerID] = struct{}{}
-		beauticianScores = append(beauticianScores, leaderboard.BeauticianScore{WorkerID: row.WorkerID, Revenue: row.Revenue, OrderCount: row.OrderCount})
+		gender := row.Gender
+		if gender != "male" && gender != "other" {
+			gender = "female"
+		}
+		beauticianScores[gender] = append(beauticianScores[gender], leaderboard.BeauticianScore{WorkerID: row.WorkerID, Revenue: row.Revenue, OrderCount: row.OrderCount})
 	}
-	for _, award := range leaderboard.RankBeauticians(beauticianScores, prizes.Beautician) {
-		addReconciliationAmount(expected, award.WorkerID, "beautician", ComponentLeaderboardBonus, BucketCommission, moneyToPaise(award.Bonus), "beautician_leaderboard")
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.beauticianPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		for _, award := range leaderboard.RankBeauticians(beauticianScores[gender], genderPrizes) {
+			addReconciliationAmount(expected, award.WorkerID, "beautician", ComponentLeaderboardBonus, BucketCommission, moneyToPaise(award.Bonus), "beautician_leaderboard")
+		}
 	}
-	riderScores := make([]leaderboard.RiderScore, 0, len(riders))
+	riderScores := map[string][]leaderboard.RiderScore{"female": {}, "male": {}, "other": {}}
 	riderTypes := map[primitive.ObjectID]string{}
 	for _, row := range riders {
 		if row.WorkerID.IsZero() || (row.WorkerType != "rider" && row.WorkerType != "beautician") || row.TripCount < 0 || !validMoney(row.TotalDistanceKM) {
@@ -213,10 +223,20 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 			return result, errors.New("duplicate rider leaderboard aggregate")
 		}
 		riderTypes[row.WorkerID] = row.WorkerType
-		riderScores = append(riderScores, leaderboard.RiderScore{WorkerID: row.WorkerID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
+		gender := row.Gender
+		if gender != "male" && gender != "other" {
+			gender = "female"
+		}
+		riderScores[gender] = append(riderScores[gender], leaderboard.RiderScore{WorkerID: row.WorkerID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
 	}
-	for _, award := range leaderboard.RankRiders(riderScores, prizes.Rider) {
-		addReconciliationAmount(expected, award.WorkerID, riderTypes[award.WorkerID], ComponentLeaderboardBonus, BucketCommission, moneyToPaise(award.Bonus), "rider_leaderboard")
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.riderPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		for _, award := range leaderboard.RankRiders(riderScores[gender], genderPrizes) {
+			addReconciliationAmount(expected, award.WorkerID, riderTypes[award.WorkerID], ComponentLeaderboardBonus, BucketCommission, moneyToPaise(award.Bonus), "rider_leaderboard")
+		}
 	}
 
 	actual := map[reconciliationKey]int64{}

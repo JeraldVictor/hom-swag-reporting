@@ -38,8 +38,49 @@ type Profile struct {
 }
 
 type PrizeSchedule struct {
-	Beautician []float64 `bson:"beutician" json:"beutician"`
-	Rider      []float64 `bson:"rider" json:"rider"`
+	Beautician         []float64                    `bson:"beutician" json:"beutician"`
+	Rider              []float64                    `bson:"rider" json:"rider"`
+	BeauticianByGender BeauticianCommissionSettings `bson:"-" json:"beautician_by_gender,omitempty"`
+	RiderByGender      BeauticianCommissionSettings `bson:"-" json:"rider_by_gender,omitempty"`
+}
+
+func (p PrizeSchedule) RiderPrizes(gender string) ([]float64, bool) {
+	setting := p.RiderByGender.Female
+	switch gender {
+	case "male":
+		setting = p.RiderByGender.Male
+	case "other":
+		setting = p.RiderByGender.Other
+	}
+	if setting.LeaderboardBonusEnabled == nil {
+		return p.Rider, true
+	}
+	return setting.LeaderboardPrizes, *setting.LeaderboardBonusEnabled
+}
+
+type GenderCommissionSettings struct {
+	LeaderboardBonusEnabled *bool     `bson:"leaderboard_bonus_enabled" json:"leaderboard_bonus_enabled,omitempty"`
+	LeaderboardPrizes       []float64 `bson:"leaderboard_prizes" json:"leaderboard_prizes,omitempty"`
+}
+
+type BeauticianCommissionSettings struct {
+	Female GenderCommissionSettings `bson:"female" json:"female"`
+	Male   GenderCommissionSettings `bson:"male" json:"male"`
+	Other  GenderCommissionSettings `bson:"other" json:"other"`
+}
+
+func (p PrizeSchedule) BeauticianPrizes(gender string) ([]float64, bool) {
+	setting := p.BeauticianByGender.Female
+	switch gender {
+	case "male":
+		setting = p.BeauticianByGender.Male
+	case "other":
+		setting = p.BeauticianByGender.Other
+	}
+	if setting.LeaderboardBonusEnabled == nil {
+		return p.Beautician, true
+	}
+	return setting.LeaderboardPrizes, *setting.LeaderboardBonusEnabled
 }
 
 type Entry struct {
@@ -123,12 +164,17 @@ func (s *Service) Get(ctx context.Context, query Query) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-	ranked := rankSourceScores(query.Role, filtered, prizes)
+	var ranked []rankedSourceScore
+	if query.Role == "beautician" {
+		ranked = rankBeauticianSourceScoresByGender(filtered, profileByID, prizes)
+	} else {
+		ranked = rankRiderSourceScoresByGender(filtered, profileByID, prizes)
+	}
 	entries := make([]Entry, 0, len(ranked))
-	for index, score := range ranked {
+	for _, score := range ranked {
 		profile := profileByID[score.WorkerID]
 		entry := Entry{
-			Rank: index + 1, UserID: score.WorkerID.Hex(), Name: profile.Name, Photo: profile.Photo,
+			Rank: score.Rank, UserID: score.WorkerID.Hex(), Name: profile.Name, Photo: profile.Photo,
 			Count: score.Count, Amount: roundTwo(score.Amount), Prize: score.Prize,
 			IsSelf: score.WorkerID == query.ViewerID,
 		}
@@ -168,6 +214,7 @@ func (s *Service) Get(ctx context.Context, query Query) (Response, error) {
 type rankedSourceScore struct {
 	SourceScore
 	Prize float64
+	Rank  int
 }
 
 func rankSourceScores(role string, scores []SourceScore, prizes PrizeSchedule) []rankedSourceScore {
@@ -180,7 +227,7 @@ func rankSourceScores(role string, scores []SourceScore, prizes PrizeSchedule) [
 			byID[score.WorkerID] = score
 		}
 		for _, award := range RankBeauticians(businessScores, prizes.Beautician) {
-			result = append(result, rankedSourceScore{SourceScore: byID[award.WorkerID], Prize: award.Bonus})
+			result = append(result, rankedSourceScore{SourceScore: byID[award.WorkerID], Prize: award.Bonus, Rank: award.Rank})
 		}
 		return result
 	}
@@ -191,7 +238,48 @@ func rankSourceScores(role string, scores []SourceScore, prizes PrizeSchedule) [
 		byID[score.WorkerID] = score
 	}
 	for _, award := range RankRiders(businessScores, prizes.Rider) {
-		result = append(result, rankedSourceScore{SourceScore: byID[award.WorkerID], Prize: award.Bonus})
+		result = append(result, rankedSourceScore{SourceScore: byID[award.WorkerID], Prize: award.Bonus, Rank: award.Rank})
+	}
+	return result
+}
+
+func rankBeauticianSourceScoresByGender(scores []SourceScore, profiles map[primitive.ObjectID]Profile, prizes PrizeSchedule) []rankedSourceScore {
+	groups := map[string][]SourceScore{"female": {}, "male": {}, "other": {}}
+	for _, score := range scores {
+		gender := profiles[score.WorkerID].Gender
+		if gender != "male" && gender != "other" {
+			gender = "female"
+		}
+		groups[gender] = append(groups[gender], score)
+	}
+	result := make([]rankedSourceScore, 0, len(scores))
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.BeauticianPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		genderSchedule := PrizeSchedule{Beautician: genderPrizes}
+		result = append(result, rankSourceScores("beautician", groups[gender], genderSchedule)...)
+	}
+	return result
+}
+
+func rankRiderSourceScoresByGender(scores []SourceScore, profiles map[primitive.ObjectID]Profile, prizes PrizeSchedule) []rankedSourceScore {
+	groups := map[string][]SourceScore{"female": {}, "male": {}, "other": {}}
+	for _, score := range scores {
+		gender := profiles[score.WorkerID].Gender
+		if gender != "male" && gender != "other" {
+			gender = "female"
+		}
+		groups[gender] = append(groups[gender], score)
+	}
+	result := make([]rankedSourceScore, 0, len(scores))
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.RiderPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		result = append(result, rankSourceScores("rider", groups[gender], PrizeSchedule{Rider: genderPrizes})...)
 	}
 	return result
 }

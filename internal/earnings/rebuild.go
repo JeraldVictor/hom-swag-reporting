@@ -98,6 +98,7 @@ type BeauticianLeaderboardSource struct {
 	WorkerID   primitive.ObjectID `bson:"_id"`
 	Revenue    float64            `bson:"revenue"`
 	OrderCount int                `bson:"order_count"`
+	Gender     string             `bson:"gender"`
 }
 
 type RiderLeaderboardSource struct {
@@ -105,11 +106,22 @@ type RiderLeaderboardSource struct {
 	WorkerType      string             `bson:"worker_type"`
 	TripCount       int                `bson:"trip_count"`
 	TotalDistanceKM float64            `bson:"total_distance_km"`
+	Gender          string             `bson:"gender"`
 }
 
 type LeaderboardPrizes struct {
-	Beautician []float64
-	Rider      []float64
+	Beautician         []float64
+	Rider              []float64
+	BeauticianByGender leaderboard.BeauticianCommissionSettings
+	RiderByGender      leaderboard.BeauticianCommissionSettings
+}
+
+func (p LeaderboardPrizes) beauticianPrizes(gender string) ([]float64, bool) {
+	return (leaderboard.PrizeSchedule{Beautician: p.Beautician, BeauticianByGender: p.BeauticianByGender}).BeauticianPrizes(gender)
+}
+
+func (p LeaderboardPrizes) riderPrizes(gender string) ([]float64, bool) {
+	return (leaderboard.PrizeSchedule{Rider: p.Rider, RiderByGender: p.RiderByGender}).RiderPrizes(gender)
 }
 
 // leaderboardConfiguration is a content-addressed snapshot of the effective
@@ -206,7 +218,7 @@ func (p *Processor) processLeaderboards(ctx context.Context, job RebuildJob, sta
 	}
 	configuration := snapshotLeaderboardConfiguration(prizes)
 
-	beauticianScores := make([]leaderboard.BeauticianScore, 0, len(beauticians))
+	beauticianScores := map[string][]leaderboard.BeauticianScore{"female": {}, "male": {}, "other": {}}
 	seenBeauticians := make(map[primitive.ObjectID]struct{}, len(beauticians))
 	for _, row := range beauticians {
 		stats.Scanned++
@@ -218,10 +230,14 @@ func (p *Processor) processLeaderboards(ctx context.Context, job RebuildJob, sta
 			return errors.New("duplicate beautician leaderboard aggregate")
 		}
 		seenBeauticians[row.WorkerID] = struct{}{}
-		beauticianScores = append(beauticianScores, leaderboard.BeauticianScore{WorkerID: row.WorkerID, Revenue: row.Revenue, OrderCount: row.OrderCount})
+		gender := row.Gender
+		if gender != "male" && gender != "other" {
+			gender = "female"
+		}
+		beauticianScores[gender] = append(beauticianScores[gender], leaderboard.BeauticianScore{WorkerID: row.WorkerID, Revenue: row.Revenue, OrderCount: row.OrderCount})
 	}
 
-	riderScores := make([]leaderboard.RiderScore, 0, len(riders))
+	riderScores := map[string][]leaderboard.RiderScore{"female": {}, "male": {}, "other": {}}
 	typeByWorker := make(map[primitive.ObjectID]string, len(riders))
 	for _, row := range riders {
 		stats.Scanned++
@@ -233,13 +249,31 @@ func (p *Processor) processLeaderboards(ctx context.Context, job RebuildJob, sta
 			return errors.New("duplicate rider leaderboard aggregate")
 		}
 		typeByWorker[row.WorkerID] = row.WorkerType
-		riderScores = append(riderScores, leaderboard.RiderScore{WorkerID: row.WorkerID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
+		gender := row.Gender
+		if gender != "male" && gender != "other" {
+			gender = "female"
+		}
+		riderScores[gender] = append(riderScores[gender], leaderboard.RiderScore{WorkerID: row.WorkerID, TripCount: row.TripCount, TotalDistanceKM: row.TotalDistanceKM})
 	}
 	// Validate and rank the complete source set before writing any awards. This
 	// prevents a malformed rider row from leaving beautician awards partially
 	// materialized in the same rebuild.
-	beauticianAwards := leaderboard.RankBeauticians(beauticianScores, prizes.Beautician)
-	riderAwards := leaderboard.RankRiders(riderScores, prizes.Rider)
+	beauticianAwards := make([]leaderboard.Award, 0, len(beauticians))
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.beauticianPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		beauticianAwards = append(beauticianAwards, leaderboard.RankBeauticians(beauticianScores[gender], genderPrizes)...)
+	}
+	riderAwards := make([]leaderboard.Award, 0, len(riders))
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.riderPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		riderAwards = append(riderAwards, leaderboard.RankRiders(riderScores[gender], genderPrizes)...)
+	}
 	for _, award := range beauticianAwards {
 		if err := p.putLeaderboardAward(ctx, job, award, "beautician", "beautician", configuration, stats); err != nil {
 			return err
@@ -288,7 +322,7 @@ func snapshotLeaderboardConfiguration(prizes LeaderboardPrizes) leaderboardConfi
 		BeauticianPrizesPaise: prizesToPaise(prizes.Beautician),
 		RiderPrizesPaise:      prizesToPaise(prizes.Rider),
 	}
-	canonical := fmt.Sprintf("beautician=%v;rider=%v", configuration.BeauticianPrizesPaise, configuration.RiderPrizesPaise)
+	canonical := fmt.Sprintf("beautician=%v;rider=%v;beautician_gender=%v;rider_gender=%v", configuration.BeauticianPrizesPaise, configuration.RiderPrizesPaise, prizes.BeauticianByGender, prizes.RiderByGender)
 	configuration.Version = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(canonical)))
 	return configuration
 }

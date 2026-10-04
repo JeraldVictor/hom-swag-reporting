@@ -647,6 +647,7 @@ func (e *BeauticianCommissionExecutor) getLeaderboardBonusByBeautician(
 			"_id":         "$beautician_id",
 			"revenue":     bson.M{"$sum": "$revenue"},
 			"order_count": bson.M{"$sum": "$order_count"},
+			"gender":      bson.M{"$first": "$beautician.gender"},
 		}}},
 	})
 	if err != nil {
@@ -658,6 +659,7 @@ func (e *BeauticianCommissionExecutor) getLeaderboardBonusByBeautician(
 		ID         primitive.ObjectID `bson:"_id"`
 		Revenue    float64            `bson:"revenue"`
 		OrderCount int                `bson:"order_count"`
+		Gender     string             `bson:"gender"`
 	}
 	var rows []leaderboardRow
 	for cursor.Next(ctx) {
@@ -675,12 +677,24 @@ func (e *BeauticianCommissionExecutor) getLeaderboardBonusByBeautician(
 	if err != nil {
 		return nil, err
 	}
-	scores := make([]leaderboard.BeauticianScore, len(rows))
-	for index, row := range rows {
-		scores[index] = leaderboard.BeauticianScore{WorkerID: row.ID, Revenue: row.Revenue, OrderCount: row.OrderCount}
-	}
-	for _, award := range leaderboard.RankBeauticians(scores, prizes) {
-		bonusByBeautician[award.WorkerID] = beauticianLeaderboardBonus{Rank: award.Rank, Bonus: award.Bonus}
+	for _, gender := range []string{"female", "male", "other"} {
+		genderPrizes, enabled := prizes.BeauticianPrizes(gender)
+		if !enabled {
+			genderPrizes = nil
+		}
+		scores := make([]leaderboard.BeauticianScore, 0)
+		for _, row := range rows {
+			rowGender := row.Gender
+			if rowGender != "male" && rowGender != "other" {
+				rowGender = "female"
+			}
+			if rowGender == gender {
+				scores = append(scores, leaderboard.BeauticianScore{WorkerID: row.ID, Revenue: row.Revenue, OrderCount: row.OrderCount})
+			}
+		}
+		for _, award := range leaderboard.RankBeauticians(scores, genderPrizes) {
+			bonusByBeautician[award.WorkerID] = beauticianLeaderboardBonus{Rank: award.Rank, Bonus: award.Bonus}
+		}
 	}
 	return bonusByBeautician, nil
 }
@@ -699,17 +713,23 @@ func (e *BeauticianCommissionExecutor) getOfficeTarget2Bonus(ctx context.Context
 	return office.MonthlyTarget2Bonus, err
 }
 
-func (e *BeauticianCommissionExecutor) getBeauticianLeaderboardPrizes(ctx context.Context, officeID primitive.ObjectID) ([]float64, error) {
+func (e *BeauticianCommissionExecutor) getBeauticianLeaderboardPrizes(ctx context.Context, officeID primitive.ObjectID) (leaderboard.PrizeSchedule, error) {
 	var office struct {
 		LeaderboardPrizes struct {
 			Beautician []float64 `bson:"beutician"`
+			Rider      []float64 `bson:"rider"`
 		} `bson:"leaderboard_prizes"`
+		BeauticianCommissionSettings leaderboard.BeauticianCommissionSettings `bson:"beautician_commission_settings"`
 	}
 	err := e.db.Collection("offices").FindOne(ctx, bson.M{"_id": officeID}).Decode(&office)
 	if err == mongo.ErrNoDocuments {
-		return nil, nil
+		return leaderboard.PrizeSchedule{}, nil
 	}
-	return office.LeaderboardPrizes.Beautician, err
+	return leaderboard.PrizeSchedule{
+		Beautician:         office.LeaderboardPrizes.Beautician,
+		Rider:              office.LeaderboardPrizes.Rider,
+		BeauticianByGender: office.BeauticianCommissionSettings,
+	}, err
 }
 
 func commissionTargetMonthBounds(date time.Time) (time.Time, time.Time) {
