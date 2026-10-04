@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/leaderboard"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -220,6 +221,33 @@ func TestProcessorMaterializesOrdersAndTrips(t *testing.T) {
 	}
 	if b.entries[0].Status != StatusSettled || b.entries[0].SettledAmountPaise != b.entries[0].AmountPaise || b.entries[0].SourceType != "orders" {
 		t.Fatalf("paid source not preserved: %+v", b.entries[0])
+	}
+}
+
+func TestProcessorExcludesOrdersBeforeCommissionApplicableFrom(t *testing.T) {
+	office, worker := primitive.NewObjectID(), primitive.NewObjectID()
+	applicableFrom := time.Date(2026, time.July, 15, 0, 0, 0, 0, time.UTC)
+	b := &rebuildBackend{
+		job: RebuildJob{ID: primitive.NewObjectID(), OfficeID: office, Scope: "commissions", StartDate: "2026-07-01", EndDate: "2026-07-31"},
+		targets: []WorkerTarget{{
+			WorkerID: worker, Target1: 100, CommissionApplicableFrom: &applicableFrom,
+		}},
+		orders: []OrderSource{
+			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-14"}, Snapshot: &CommissionSnapshot{OrderCost: float(100), SpecialCommission: float(10), GeneralCommission: float(20), UpgradeAddonCommission: float(5)}},
+			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-15"}, Snapshot: &CommissionSnapshot{OrderCost: float(100), SpecialCommission: float(10), GeneralCommission: float(20), UpgradeAddonCommission: float(5)}},
+		},
+	}
+
+	if _, err := NewProcessor(b).ProcessNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.entries) != 3 {
+		t.Fatalf("entries=%d, want only the three commission components from the inclusive effective date", len(b.entries))
+	}
+	for _, entry := range b.entries {
+		if entry.ServiceDateKey != "2026-07-15" {
+			t.Fatalf("ineligible order was materialized: %+v", entry)
+		}
 	}
 }
 

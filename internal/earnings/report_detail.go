@@ -252,6 +252,21 @@ func (r *Repository) loadReportOrders(ctx context.Context, officeID, workerID pr
 			"office_id": officeID, "beautician_id": workerID, "status": "completed",
 			"is_deleted": bson.M{"$ne": true}, "booking_info.date": bson.M{"$gte": startDate, "$lte": endDate},
 		}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from": "beauticians", "localField": "beautician_id", "foreignField": "_id", "as": "commission_beautician",
+		}}},
+		{{Key: "$unwind", Value: "$commission_beautician"}},
+		{{Key: "$match", Value: bson.M{"$expr": bson.M{"$gte": bson.A{
+			"$booking_info.date",
+			bson.M{"$dateToString": bson.M{
+				"date": bson.M{"$ifNull": bson.A{
+					"$commission_beautician.commission_applicable_from",
+					"$commission_beautician.joining_date",
+					"$commission_beautician.created_at",
+				}},
+				"format": "%Y-%m-%d", "timezone": "Asia/Kolkata", "onNull": "1970-01-01",
+			}},
+		}}}}},
 		{{Key: "$project", Value: bson.M{
 			"_id": 1, "order_number": 1, "service_date": "$booking_info.date", "booking_info": 1, "customer": 1,
 			"order_cost": bson.M{"$ifNull": bson.A{"$commission_snapshot.order_cost", bson.M{"$ifNull": bson.A{"$subtotal", "$total"}}}},

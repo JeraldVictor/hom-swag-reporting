@@ -86,9 +86,12 @@ type TripSource struct {
 }
 
 type WorkerTarget struct {
-	WorkerID primitive.ObjectID `bson:"_id"`
-	Target1  float64            `bson:"monthly_target1"`
-	Target2  float64            `bson:"monthly_target2"`
+	WorkerID                 primitive.ObjectID `bson:"_id"`
+	Target1                  float64            `bson:"monthly_target1"`
+	Target2                  float64            `bson:"monthly_target2"`
+	CommissionApplicableFrom *time.Time         `bson:"commission_applicable_from"`
+	JoiningDate              *time.Time         `bson:"joining_date"`
+	CreatedAt                time.Time          `bson:"created_at"`
 }
 
 type BeauticianLeaderboardSource struct {
@@ -329,17 +332,22 @@ func (p *Processor) processOrders(ctx context.Context, job RebuildJob, stats *Re
 	}
 	targetByWorker := make(map[primitive.ObjectID]float64, len(targets))
 	target2ByWorker := make(map[primitive.ObjectID]float64, len(targets))
+	eligibleFromByWorker := make(map[primitive.ObjectID]string, len(targets))
 	for _, target := range targets {
 		if target.WorkerID.IsZero() || !validMoney(target.Target1) || !validMoney(target.Target2) {
 			return errors.New("worker targets must be finite non-negative amounts")
 		}
 		targetByWorker[target.WorkerID] = target.Target1
 		target2ByWorker[target.WorkerID] = target.Target2
+		eligibleFromByWorker[target.WorkerID] = commissionApplicableFromKey(target)
 	}
 	revenue := map[string]float64{}
 	invalidMonth := map[string]bool{}
 	for _, order := range orders {
 		if order.Status != "completed" {
+			continue
+		}
+		if orderDate(order) < eligibleFromByWorker[order.BeauticianID] {
 			continue
 		}
 		key := workerMonthKey(order.BeauticianID, orderDate(order))
@@ -362,6 +370,9 @@ func (p *Processor) processOrders(ctx context.Context, job RebuildJob, stats *Re
 			continue
 		}
 		if serviceDate < job.StartDate || serviceDate > job.EndDate {
+			continue
+		}
+		if serviceDate < eligibleFromByWorker[order.BeauticianID] {
 			continue
 		}
 		stats.Scanned++
@@ -418,6 +429,24 @@ func (p *Processor) processOrders(ctx context.Context, job RebuildJob, stats *Re
 		}
 	}
 	return nil
+}
+
+func commissionApplicableFromKey(target WorkerTarget) string {
+	date := target.CommissionApplicableFrom
+	if date == nil {
+		date = target.JoiningDate
+	}
+	if date == nil && !target.CreatedAt.IsZero() {
+		date = &target.CreatedAt
+	}
+	if date == nil {
+		return "1970-01-01"
+	}
+	location, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return date.UTC().Format("2006-01-02")
+	}
+	return date.In(location).Format("2006-01-02")
 }
 
 func (p *Processor) processTrips(ctx context.Context, job RebuildJob, stats *RebuildStats) error {

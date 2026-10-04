@@ -99,9 +99,16 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
+		beauticianCommissionProfileLookupStage("beautician_id"),
+		{{Key: "$unwind", Value: "$beautician"}},
+		{{Key: "$match", Value: beauticianCommissionEligibilityMatch("$booking_info.date")}},
 		commissionIssueLookupStage(),
 		{{Key: "$group", Value: bson.M{
-			"_id": "$beautician_id",
+			"_id":             "$beautician_id",
+			"name":            bson.M{"$first": "$beautician.name"},
+			"emp_code":        bson.M{"$first": "$beautician.emp_code"},
+			"monthly_target1": bson.M{"$first": "$beautician.monthly_target1"},
+			"monthly_target2": bson.M{"$first": "$beautician.monthly_target2"},
 			"total_special_commission": bson.M{"$sum": eligibleCompletedExpr(bson.M{"$ifNull": bson.A{
 				"$commission_snapshot.special_commission",
 				"$commission_details.special_commission",
@@ -138,20 +145,13 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			"total_refund": bson.M{"$sum": paymentRefundExpr()},
 			"order_count":  bson.M{"$sum": completedOnlyExpr(1)},
 		}}},
-		{{Key: "$lookup", Value: bson.M{
-			"from":         "beauticians",
-			"localField":   "_id",
-			"foreignField": "_id",
-			"as":           "beautician",
-		}}},
-		{{Key: "$unwind", Value: "$beautician"}},
 	}
 
 	pipeline = append(pipeline, bson.D{{Key: "$project", Value: bson.M{
-		"name":                           "$beautician.name",
-		"emp_code":                       "$beautician.emp_code",
-		"monthly_target1":                "$beautician.monthly_target1",
-		"monthly_target2":                "$beautician.monthly_target2",
+		"name":                           1,
+		"emp_code":                       1,
+		"monthly_target1":                1,
+		"monthly_target2":                1,
 		"total_special_commission":       1,
 		"total_general_commission":       1,
 		"total_upgrade_addon_commission": 1,
@@ -438,6 +438,9 @@ func (e *BeauticianCommissionExecutor) getLedgerTotalsByBeautician(
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
+		beauticianCommissionProfileLookupStage("worker_id"),
+		{{Key: "$unwind", Value: "$beautician"}},
+		{{Key: "$match", Value: beauticianCommissionEligibilityMatch("$service_date_key")}},
 		{{Key: "$group", Value: bson.M{
 			"_id":                      "$worker_id",
 			"special_commission_paise": bson.M{"$sum": componentAmount("special_commission")},
@@ -555,6 +558,9 @@ func (e *BeauticianCommissionExecutor) getMonthlyTargetRevenueByBeautician(
 
 	cursor, err := e.db.Collection("orders").Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: match}},
+		beauticianCommissionProfileLookupStage("beautician_id"),
+		{{Key: "$unwind", Value: "$beautician"}},
+		{{Key: "$match", Value: beauticianCommissionEligibilityMatch("$booking_info.date")}},
 		commissionIssueLookupStage(),
 		{{Key: "$group", Value: bson.M{
 			"_id": "$beautician_id",
@@ -588,6 +594,24 @@ func (e *BeauticianCommissionExecutor) getMonthlyTargetRevenueByBeautician(
 	return revenueByBeautician, cursor.Err()
 }
 
+func beauticianCommissionProfileLookupStage(localField string) bson.D {
+	return bson.D{{Key: "$lookup", Value: bson.M{
+		"from": "beauticians", "localField": localField, "foreignField": "_id", "as": "beautician",
+	}}}
+}
+
+func beauticianCommissionEligibilityMatch(serviceDateExpression string) bson.M {
+	effectiveDate := bson.M{"$dateToString": bson.M{
+		"date": bson.M{"$ifNull": bson.A{
+			"$beautician.commission_applicable_from",
+			"$beautician.joining_date",
+			"$beautician.created_at",
+		}},
+		"format": "%Y-%m-%d", "timezone": "Asia/Kolkata", "onNull": "1970-01-01",
+	}}
+	return bson.M{"$expr": bson.M{"$gte": bson.A{serviceDateExpression, effectiveDate}}}
+}
+
 func (e *BeauticianCommissionExecutor) getLeaderboardBonusByBeautician(
 	ctx context.Context,
 	officeID primitive.ObjectID,
@@ -608,6 +632,17 @@ func (e *BeauticianCommissionExecutor) getLeaderboardBonusByBeautician(
 			"office_id": officeID,
 			"date":      bson.M{"$gte": startInstant, "$lte": endInstant},
 		}}},
+		beauticianCommissionProfileLookupStage("beautician_id"),
+		{{Key: "$unwind", Value: "$beautician"}},
+		{{Key: "$match", Value: bson.M{"$expr": bson.M{"$gte": bson.A{
+			"$date",
+			bson.M{"$ifNull": bson.A{
+				"$beautician.commission_applicable_from",
+				"$beautician.joining_date",
+				"$beautician.created_at",
+				primitive.NewDateTimeFromTime(time.Unix(0, 0).UTC()),
+			}},
+		}}}}},
 		{{Key: "$group", Value: bson.M{
 			"_id":         "$beautician_id",
 			"revenue":     bson.M{"$sum": "$revenue"},

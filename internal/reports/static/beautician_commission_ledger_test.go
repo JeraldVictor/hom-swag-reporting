@@ -2,6 +2,7 @@ package static
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/JeraldVictor/hom-swag-reporting/internal/reports"
@@ -9,6 +10,46 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
 )
+
+func TestBeauticianCommissionReportPipelineAppliesEligibilityDate(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	officeID := primitive.NewObjectID()
+
+	mt.Run("reports preview summary and export share the eligibility-filtered executor", func(mt *mtest.T) {
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".orders", mtest.FirstBatch),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".leaderboards", mtest.FirstBatch),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".offices", mtest.FirstBatch),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".offices", mtest.FirstBatch),
+		)
+
+		err := NewBeauticianCommissionExecutor(mt.DB).Run(context.Background(), reports.Request{
+			Parameters: map[string]interface{}{
+				"start_date": "2026-10-01", "end_date": "2026-11-30", "office_id": officeID.Hex(),
+			},
+		}, &integrationSink{})
+		if err != nil {
+			mt.Fatal(err)
+		}
+
+		events := mt.GetAllStartedEvents()
+		if len(events) == 0 {
+			mt.Fatal("expected the commission report aggregation to run")
+		}
+		pipeline := events[0].Command.String()
+		for _, expected := range []string{
+			"commission_applicable_from",
+			"joining_date",
+			"created_at",
+			"$booking_info.date",
+			"$gte",
+		} {
+			if !strings.Contains(pipeline, expected) {
+				mt.Fatalf("commission report pipeline is missing %q: %s", expected, pipeline)
+			}
+		}
+	})
+}
 
 func TestBeauticianCommissionAuthoritativeUsesLedgerPayables(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))

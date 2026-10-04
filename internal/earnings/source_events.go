@@ -129,6 +129,7 @@ func (p *SourceEventProcessor) processOrder(ctx context.Context, event SourceEve
 		return fmt.Errorf("load worker targets: %w", err)
 	}
 	target1, target2 := float64(0), float64(0)
+	eligibleFrom := "1970-01-01"
 	for _, target := range targets {
 		if target.WorkerID.IsZero() || !validMoney(target.Target1) || !validMoney(target.Target2) {
 			return permanentSourceEventError("worker targets must be finite non-negative amounts")
@@ -136,9 +137,18 @@ func (p *SourceEventProcessor) processOrder(ctx context.Context, event SourceEve
 		if target.WorkerID == order.BeauticianID {
 			target1 = target.Target1
 			target2 = target.Target2
+			eligibleFrom = commissionApplicableFromKey(target)
 		}
 	}
-	revenue, valid := monthlyRevenueForWorker(orders, order.BeauticianID, event.ServiceDate[:7])
+	if event.ServiceDate < eligibleFrom {
+		return permanentSourceEventError("order predates the beautician commission eligibility date")
+	}
+	revenue, valid := monthlyRevenueForWorker(
+		orders,
+		order.BeauticianID,
+		event.ServiceDate[:7],
+		eligibleFrom,
+	)
 	result.Stats.Scanned = 1
 	if !valid {
 		return permanentSourceEventError("monthly order context contains an invalid snapshot")
@@ -170,7 +180,7 @@ func (p *SourceEventProcessor) processOrder(ctx context.Context, event SourceEve
 	if revenue >= target1 {
 		for _, monthlyOrder := range orders {
 			serviceDate := orderDate(monthlyOrder)
-			if monthlyOrder.OfficeID != job.OfficeID || monthlyOrder.BeauticianID != order.BeauticianID || monthlyOrder.Status != "completed" || monthlyOrder.IsDeleted || !strings.HasPrefix(serviceDate, event.ServiceDate[:7]+"-") {
+			if monthlyOrder.OfficeID != job.OfficeID || monthlyOrder.BeauticianID != order.BeauticianID || monthlyOrder.Status != "completed" || monthlyOrder.IsDeleted || serviceDate < eligibleFrom || !strings.HasPrefix(serviceDate, event.ServiceDate[:7]+"-") {
 				continue
 			}
 			if monthlyOrder.ID.IsZero() || !validSourceDate(serviceDate) || monthlyOrder.Snapshot == nil || monthlyOrder.Snapshot.GeneralCommission == nil || !validMoney(*monthlyOrder.Snapshot.GeneralCommission) {
@@ -293,10 +303,14 @@ func payableSnapshotTime(snapshot *PayableSnapshot) time.Time {
 	return snapshot.CapturedAt
 }
 
-func monthlyRevenueForWorker(orders []OrderSource, workerID primitive.ObjectID, month string) (float64, bool) {
+func monthlyRevenueForWorker(orders []OrderSource, workerID primitive.ObjectID, month string, eligibleFrom ...string) (float64, bool) {
 	revenue := float64(0)
+	minimumDate := "1970-01-01"
+	if len(eligibleFrom) > 0 {
+		minimumDate = eligibleFrom[0]
+	}
 	for _, order := range orders {
-		if order.Status != "completed" || order.IsDeleted || order.BeauticianID != workerID || !strings.HasPrefix(orderDate(order), month+"-") {
+		if order.Status != "completed" || order.IsDeleted || order.BeauticianID != workerID || orderDate(order) < minimumDate || !strings.HasPrefix(orderDate(order), month+"-") {
 			continue
 		}
 		if order.Snapshot == nil || order.Snapshot.OrderCost == nil || !validMoney(*order.Snapshot.OrderCost) {

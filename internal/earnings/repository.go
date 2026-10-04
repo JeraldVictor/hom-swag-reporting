@@ -248,7 +248,10 @@ func (r *Repository) loadOfficeTripRates(ctx context.Context, officeID primitive
 }
 
 func (r *Repository) LoadWorkerTargets(ctx context.Context, officeID primitive.ObjectID) ([]WorkerTarget, error) {
-	cur, err := r.db.Collection("beauticians").Find(ctx, bson.M{"office_id": officeID, "is_deleted": bson.M{"$ne": true}}, options.Find().SetProjection(bson.M{"_id": 1, "monthly_target1": 1, "monthly_target2": 1}))
+	cur, err := r.db.Collection("beauticians").Find(ctx, bson.M{"office_id": officeID, "is_deleted": bson.M{"$ne": true}}, options.Find().SetProjection(bson.M{
+		"_id": 1, "monthly_target1": 1, "monthly_target2": 1,
+		"commission_applicable_from": 1, "joining_date": 1, "created_at": 1,
+	}))
 	if err != nil {
 		return nil, err
 	}
@@ -275,6 +278,19 @@ func (r *Repository) LoadBeauticianLeaderboardSources(ctx context.Context, offic
 	}
 	cursor, err := r.db.Collection("leaderboards").Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"office_id": officeID, "date": bson.M{"$gte": start, "$lte": end}}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from": "beauticians", "localField": "beautician_id", "foreignField": "_id", "as": "commission_beautician",
+		}}},
+		{{Key: "$unwind", Value: "$commission_beautician"}},
+		{{Key: "$match", Value: bson.M{"$expr": bson.M{"$gte": bson.A{
+			"$date",
+			bson.M{"$ifNull": bson.A{
+				"$commission_beautician.commission_applicable_from",
+				"$commission_beautician.joining_date",
+				"$commission_beautician.created_at",
+				primitive.NewDateTimeFromTime(time.Unix(0, 0).UTC()),
+			}},
+		}}}}},
 		{{Key: "$group", Value: bson.M{"_id": "$beautician_id", "revenue": bson.M{"$sum": "$revenue"}, "order_count": bson.M{"$sum": "$order_count"}}}},
 	})
 	if err != nil {

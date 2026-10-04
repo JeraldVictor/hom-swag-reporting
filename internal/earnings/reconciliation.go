@@ -104,16 +104,18 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 	expected := map[reconciliationKey]int64{}
 	target1 := map[primitive.ObjectID]float64{}
 	target2 := map[primitive.ObjectID]float64{}
+	eligibleFrom := map[primitive.ObjectID]string{}
 	for _, target := range targets {
 		if target.WorkerID.IsZero() || !validMoney(target.Target1) || !validMoney(target.Target2) {
 			return result, errors.New("worker targets must be finite non-negative amounts")
 		}
 		target1[target.WorkerID], target2[target.WorkerID] = target.Target1, target.Target2
+		eligibleFrom[target.WorkerID] = commissionApplicableFromKey(target)
 	}
 	revenue := map[string]float64{}
 	invalidMonth := map[string]bool{}
 	for _, order := range orders {
-		if order.Status != "completed" || order.IsDeleted {
+		if order.Status != "completed" || order.IsDeleted || orderDate(order) < eligibleFrom[order.BeauticianID] {
 			continue
 		}
 		key := workerMonthKey(order.BeauticianID, orderDate(order))
@@ -125,7 +127,7 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 	}
 	for _, order := range orders {
 		serviceDate := orderDate(order)
-		if order.Status != "completed" || order.IsDeleted || serviceDate < startDate || serviceDate > endDate {
+		if order.Status != "completed" || order.IsDeleted || serviceDate < eligibleFrom[order.BeauticianID] || serviceDate < startDate || serviceDate > endDate {
 			continue
 		}
 		if order.ID.IsZero() || order.BeauticianID.IsZero() || !validSourceDate(serviceDate) || order.Snapshot == nil {
