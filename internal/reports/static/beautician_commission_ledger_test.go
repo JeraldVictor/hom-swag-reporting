@@ -11,11 +11,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
 )
 
-func TestBeauticianCommissionReportPipelineAppliesEligibilityDate(t *testing.T) {
+func TestBeauticianCommissionReportPipelineUsesTargetStartDate(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 	officeID := primitive.NewObjectID()
 
-	mt.Run("reports preview summary and export share the eligibility-filtered executor", func(mt *mtest.T) {
+	mt.Run("reports preview summary and export share the target-start executor", func(mt *mtest.T) {
 		mt.AddMockResponses(
 			mtest.CreateCursorResponse(0, mt.DB.Name()+".orders", mtest.FirstBatch),
 			mtest.CreateCursorResponse(0, mt.DB.Name()+".leaderboards", mtest.FirstBatch),
@@ -211,5 +211,40 @@ func assertLedgerReportCell(t *testing.T, rows [][]interface{}, column string, w
 	index := integrationColumnIndex(t, rows[0], column)
 	if got := rows[1][index]; got != want {
 		t.Fatalf("%s = %#v, want %#v", column, got, want)
+	}
+}
+
+func TestBeauticianCommissionPaysPreTargetGeneralBelowTarget(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	office, worker := primitive.NewObjectID(), primitive.NewObjectID()
+	for _, mode := range []string{"shadow", "authoritative"} {
+		mt.Run(mode, func(mt *mtest.T) {
+			if mode == "authoritative" {
+				mt.AddMockResponses(mtest.CreateCursorResponse(0, mt.DB.Name()+".earnings_ledger", mtest.FirstBatch, bson.D{
+					{Key: "_id", Value: worker}, {Key: "general_commission_paise", Value: int64(2000)},
+				}))
+			}
+			mt.AddMockResponses(
+				mtest.CreateCursorResponse(0, mt.DB.Name()+".orders", mtest.FirstBatch, bson.D{
+					{Key: "_id", Value: worker}, {Key: "monthly_target1", Value: 100.0},
+					{Key: "total_general_commission", Value: 40.0}, {Key: "pre_target_general_commission", Value: 20.0},
+				}),
+				mtest.CreateCursorResponse(0, mt.DB.Name()+".orders", mtest.FirstBatch, bson.D{
+					{Key: "_id", Value: worker}, {Key: "net_revenue", Value: 25.0},
+				}),
+			)
+			if mode != "authoritative" {
+				mt.AddMockResponses(mtest.CreateCursorResponse(0, mt.DB.Name()+".leaderboards", mtest.FirstBatch), mtest.CreateCursorResponse(0, mt.DB.Name()+".offices", mtest.FirstBatch))
+			}
+			mt.AddMockResponses(mtest.CreateCursorResponse(0, mt.DB.Name()+".offices", mtest.FirstBatch))
+			sink := &integrationSink{}
+			err := NewBeauticianCommissionExecutorWithMode(mt.DB, mode).Run(context.Background(), reports.Request{
+				Parameters: map[string]interface{}{"start_date": "2026-07-01", "end_date": "2026-07-31", "office_id": office.Hex()},
+			}, sink)
+			if err != nil {
+				mt.Fatal(err)
+			}
+			assertLedgerReportCell(t, sink.rows, "Payable General Commission", "20.00")
+		})
 	}
 }

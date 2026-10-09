@@ -18,6 +18,7 @@ type sourceEventBackendStub struct {
 	closed                                                       bool
 	closedErr, loadErr, monthlyErr, targetsErr, bonusErr, putErr error
 	bonus                                                        float64
+	applicableFrom                                               *time.Time
 	invalidTarget                                                bool
 	putFailAt, putCalls                                          int
 	order                                                        OrderSource
@@ -56,7 +57,7 @@ func (b *sourceEventBackendStub) LoadWorkerTargets(context.Context, primitive.Ob
 	if b.invalidTarget {
 		return []WorkerTarget{{}}, nil
 	}
-	return []WorkerTarget{{WorkerID: sourceTestWorker, Target1: 50, Target2: 200}}, b.targetsErr
+	return []WorkerTarget{{WorkerID: sourceTestWorker, Target1: 50, Target2: 200, CommissionApplicableFrom: b.applicableFrom}}, b.targetsErr
 }
 func (b *sourceEventBackendStub) LoadTarget2Bonus(context.Context, primitive.ObjectID) (float64, error) {
 	return b.bonus, b.bonusErr
@@ -361,3 +362,24 @@ func TestSourceEventTripNegativePaths(t *testing.T) {
 }
 
 func floatPointer(v float64) *float64 { return &v }
+
+func TestSourceEventPaysEarlierOrderWithoutTargetChecks(t *testing.T) {
+	b := defaultSourceBackend()
+	cutoff := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	b.applicableFrom = &cutoff
+	result, _, err := NewSourceEventProcessor(b).Process(context.Background(), validSourceEvent())
+	if err != nil || result.Stats.Inserted != 3 {
+		t.Fatalf("earlier commission should be payable: result=%+v err=%v", result, err)
+	}
+}
+func TestSourceEventAppliesTargetsOnCutoffDate(t *testing.T) {
+	b := defaultSourceBackend()
+	cutoff := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+	b.applicableFrom = &cutoff
+	b.order.Snapshot.OrderCost = float(25)
+	b.orders = []OrderSource{b.order}
+	result, _, err := NewSourceEventProcessor(b).Process(context.Background(), validSourceEvent())
+	if err != nil || result.Stats.Inserted != 2 {
+		t.Fatalf("cutoff general commission should require target: result=%+v err=%v", result, err)
+	}
+}

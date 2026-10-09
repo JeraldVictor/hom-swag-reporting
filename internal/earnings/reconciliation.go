@@ -127,7 +127,7 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 	}
 	for _, order := range orders {
 		serviceDate := orderDate(order)
-		if order.Status != "completed" || order.IsDeleted || serviceDate < eligibleFrom[order.BeauticianID] || serviceDate < startDate || serviceDate > endDate {
+		if order.Status != "completed" || order.IsDeleted || serviceDate < startDate || serviceDate > endDate {
 			continue
 		}
 		if order.ID.IsZero() || order.BeauticianID.IsZero() || !validSourceDate(serviceDate) || order.Snapshot == nil {
@@ -141,7 +141,7 @@ func (r *Reconciler) Run(ctx context.Context, officeID primitive.ObjectID, start
 			enabled   bool
 		}{
 			{ComponentSpecialCommission, order.Snapshot.SpecialCommission, true},
-			{ComponentGeneralCommission, order.Snapshot.GeneralCommission, !invalidMonth[workerKey] && revenue[workerKey] >= target1[order.BeauticianID]},
+			{ComponentGeneralCommission, order.Snapshot.GeneralCommission, serviceDate < eligibleFrom[order.BeauticianID] || (!invalidMonth[workerKey] && revenue[workerKey] >= target1[order.BeauticianID])},
 			{ComponentUpgradeCommission, order.Snapshot.UpgradeAddonCommission, true},
 		}
 		for _, item := range components {

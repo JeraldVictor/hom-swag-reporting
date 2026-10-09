@@ -101,7 +101,6 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		{{Key: "$match", Value: match}},
 		beauticianCommissionProfileLookupStage("beautician_id"),
 		{{Key: "$unwind", Value: "$beautician"}},
-		{{Key: "$match", Value: beauticianCommissionEligibilityMatch("$booking_info.date")}},
 		commissionIssueLookupStage(),
 		{{Key: "$group", Value: bson.M{
 			"_id":             "$beautician_id",
@@ -118,6 +117,11 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 				"$commission_snapshot.general_commission",
 				"$commission_details.general_commission",
 				0,
+			}})},
+			"pre_target_general_commission": bson.M{"$sum": eligibleCompletedExpr(bson.M{"$cond": bson.A{
+				beauticianCommissionEligibilityMatch("$booking_info.date")["$expr"],
+				0,
+				bson.M{"$ifNull": bson.A{"$commission_snapshot.general_commission", "$commission_details.general_commission", 0}},
 			}})},
 			"total_upgrade_addon_commission": bson.M{"$sum": eligibleCompletedExpr(bson.M{"$ifNull": bson.A{
 				"$commission_snapshot.upgrade_addon_commission",
@@ -154,6 +158,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		"monthly_target2":                1,
 		"total_special_commission":       1,
 		"total_general_commission":       1,
+		"pre_target_general_commission":  1,
 		"total_upgrade_addon_commission": 1,
 		"issue_special_commission":       1,
 		"issue_general_commission":       1,
@@ -285,7 +290,7 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 		monthlyRevenue := targetRevenue.NetRevenue
 		target1Achieved := monthlyRevenue >= result.MonthlyTarget1
 		target2Achieved := result.MonthlyTarget2 > 0 && monthlyRevenue >= result.MonthlyTarget2
-		payableGeneralCommission := 0.0
+		payableGeneralCommission := result.PreTargetGeneralCommission
 		if target1Achieved {
 			payableGeneralCommission = result.TotalGeneralCommission
 		}
@@ -301,9 +306,6 @@ func (e *BeauticianCommissionExecutor) Run(ctx context.Context, req reports.Requ
 			result.TotalGeneralCommission = math.Max(0, result.TotalGeneralCommission)
 			result.TotalUpgradeAddonCommission = math.Max(0, paiseToMoney(ledger.UpgradeCommissionPaise)-result.IssueUpgradeAddonCommission)
 			payableTarget2Bonus = paiseToMoney(ledger.TargetBonusPaise)
-			if !target1Achieved {
-				payableGeneralCommission = 0
-			}
 			if !target2Achieved {
 				payableTarget2Bonus = 0
 			}
@@ -371,6 +373,7 @@ type beauticianCommissionRow struct {
 	MonthlyTarget1              float64            `bson:"monthly_target1"`
 	MonthlyTarget2              float64            `bson:"monthly_target2"`
 	TotalSpecialCommission      float64            `bson:"total_special_commission"`
+	PreTargetGeneralCommission  float64            `bson:"pre_target_general_commission"`
 	TotalGeneralCommission      float64            `bson:"total_general_commission"`
 	TotalUpgradeAddonCommission float64            `bson:"total_upgrade_addon_commission"`
 	IssueSpecialCommission      float64            `bson:"issue_special_commission"`
@@ -440,7 +443,6 @@ func (e *BeauticianCommissionExecutor) getLedgerTotalsByBeautician(
 		{{Key: "$match", Value: match}},
 		beauticianCommissionProfileLookupStage("worker_id"),
 		{{Key: "$unwind", Value: "$beautician"}},
-		{{Key: "$match", Value: beauticianCommissionEligibilityMatch("$service_date_key")}},
 		{{Key: "$group", Value: bson.M{
 			"_id":                      "$worker_id",
 			"special_commission_paise": bson.M{"$sum": componentAmount("special_commission")},

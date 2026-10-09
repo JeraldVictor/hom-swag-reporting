@@ -406,9 +406,6 @@ func (p *Processor) processOrders(ctx context.Context, job RebuildJob, stats *Re
 		if serviceDate < job.StartDate || serviceDate > job.EndDate {
 			continue
 		}
-		if serviceDate < eligibleFromByWorker[order.BeauticianID] {
-			continue
-		}
 		stats.Scanned++
 		if order.Snapshot == nil {
 			stats.MissingSnapshots++
@@ -420,7 +417,7 @@ func (p *Processor) processOrders(ctx context.Context, job RebuildJob, stats *Re
 			enabled   bool
 		}{
 			{ComponentSpecialCommission, order.Snapshot.SpecialCommission, true},
-			{ComponentGeneralCommission, order.Snapshot.GeneralCommission, !invalidMonth[workerMonthKey(order.BeauticianID, serviceDate)] && revenue[workerMonthKey(order.BeauticianID, serviceDate)] >= targetByWorker[order.BeauticianID]},
+			{ComponentGeneralCommission, order.Snapshot.GeneralCommission, serviceDate < eligibleFromByWorker[order.BeauticianID] || (!invalidMonth[workerMonthKey(order.BeauticianID, serviceDate)] && revenue[workerMonthKey(order.BeauticianID, serviceDate)] >= targetByWorker[order.BeauticianID])},
 			{ComponentUpgradeCommission, order.Snapshot.UpgradeAddonCommission, true},
 		}
 		for _, item := range components {

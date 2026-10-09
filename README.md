@@ -228,3 +228,15 @@ To add a new static report:
 2. Implement the `Executor` interface.
 3. Register the executor in `cmd/reporting/main.go`.
 4. Add the report definition to the server seeder in `server/src/scripts/seeders/report-definitions.ts`.
+
+### Beautician commission target start date
+
+`commission_applicable_from` starts target validation, inclusive of that IST
+service date. Completed orders served earlier retain their earned commission
+without target checks. Earlier revenue does not count toward target 1 or target 2.
+From the selected date, general commission follows the monthly target; special
+and upgrade commissions retain their existing rules. Reports, source events,
+ledger rebuilds, reconciliation, and payout details use this same cutoff.
+Existing paid snapshots and settlements remain authoritative. After changing
+the date, rebuild the affected open commission periods before paying from the
+ledger; closed periods retain their existing protections.

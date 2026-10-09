@@ -224,13 +224,13 @@ func TestProcessorMaterializesOrdersAndTrips(t *testing.T) {
 	}
 }
 
-func TestProcessorExcludesOrdersBeforeCommissionApplicableFrom(t *testing.T) {
+func TestProcessorPaysEarlierOrdersWithoutUsingTheirRevenueForTargets(t *testing.T) {
 	office, worker := primitive.NewObjectID(), primitive.NewObjectID()
 	applicableFrom := time.Date(2026, time.July, 15, 0, 0, 0, 0, time.UTC)
 	b := &rebuildBackend{
 		job: RebuildJob{ID: primitive.NewObjectID(), OfficeID: office, Scope: "commissions", StartDate: "2026-07-01", EndDate: "2026-07-31"},
 		targets: []WorkerTarget{{
-			WorkerID: worker, Target1: 100, CommissionApplicableFrom: &applicableFrom,
+			WorkerID: worker, Target1: 150, CommissionApplicableFrom: &applicableFrom,
 		}},
 		orders: []OrderSource{
 			{ID: primitive.NewObjectID(), BeauticianID: worker, Status: "completed", BookingInfo: OrderBookingInfo{Date: "2026-07-14"}, Snapshot: &CommissionSnapshot{OrderCost: float(100), SpecialCommission: float(10), GeneralCommission: float(20), UpgradeAddonCommission: float(5)}},
@@ -241,14 +241,15 @@ func TestProcessorExcludesOrdersBeforeCommissionApplicableFrom(t *testing.T) {
 	if _, err := NewProcessor(b).ProcessNext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.entries) != 3 {
-		t.Fatalf("entries=%d, want only the three commission components from the inclusive effective date", len(b.entries))
+	if len(b.entries) != 5 {
+		t.Fatalf("entries=%d, want all earlier components and only special/upgrade on the effective date", len(b.entries))
 	}
 	for _, entry := range b.entries {
-		if entry.ServiceDateKey != "2026-07-15" {
-			t.Fatalf("ineligible order was materialized: %+v", entry)
+		if entry.Component == ComponentGeneralCommission && entry.ServiceDateKey != "2026-07-14" {
+			t.Fatalf("pre-date revenue incorrectly unlocked target-gated commission: %+v", entry)
 		}
 	}
+
 }
 
 func TestProcessorMaterializesTarget2BonusWithImmutableInputs(t *testing.T) {

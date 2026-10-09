@@ -140,9 +140,6 @@ func (p *SourceEventProcessor) processOrder(ctx context.Context, event SourceEve
 			eligibleFrom = commissionApplicableFromKey(target)
 		}
 	}
-	if event.ServiceDate < eligibleFrom {
-		return permanentSourceEventError("order predates the beautician commission eligibility date")
-	}
 	revenue, valid := monthlyRevenueForWorker(
 		orders,
 		order.BeauticianID,
@@ -150,7 +147,7 @@ func (p *SourceEventProcessor) processOrder(ctx context.Context, event SourceEve
 		eligibleFrom,
 	)
 	result.Stats.Scanned = 1
-	if !valid {
+	if !valid && event.ServiceDate >= eligibleFrom {
 		return permanentSourceEventError("monthly order context contains an invalid snapshot")
 	}
 	components := []struct {
@@ -172,15 +169,15 @@ func (p *SourceEventProcessor) processOrder(ctx context.Context, event SourceEve
 			return err
 		}
 	}
-	// General commission is gated by the worker's complete calendar-month
-	// revenue. The event that crosses target 1 therefore makes earlier orders
+	// General commission before the cutoff is unconditional. Later orders
+	// use calendar-month revenue earned on or after the cutoff. The event that crosses target 1 therefore makes earlier orders
 	// eligible too. Materialize just this dependent worker-month set instead of
 	// scheduling a broad day rebuild, otherwise those earlier orders would be
 	// permanently omitted from the authoritative report.
-	if revenue >= target1 {
+	{
 		for _, monthlyOrder := range orders {
 			serviceDate := orderDate(monthlyOrder)
-			if monthlyOrder.OfficeID != job.OfficeID || monthlyOrder.BeauticianID != order.BeauticianID || monthlyOrder.Status != "completed" || monthlyOrder.IsDeleted || serviceDate < eligibleFrom || !strings.HasPrefix(serviceDate, event.ServiceDate[:7]+"-") {
+			if monthlyOrder.OfficeID != job.OfficeID || monthlyOrder.BeauticianID != order.BeauticianID || monthlyOrder.Status != "completed" || monthlyOrder.IsDeleted || (serviceDate >= eligibleFrom && (!valid || revenue < target1)) || !strings.HasPrefix(serviceDate, event.ServiceDate[:7]+"-") {
 				continue
 			}
 			if monthlyOrder.ID.IsZero() || !validSourceDate(serviceDate) || monthlyOrder.Snapshot == nil || monthlyOrder.Snapshot.GeneralCommission == nil || !validMoney(*monthlyOrder.Snapshot.GeneralCommission) {
@@ -195,7 +192,7 @@ func (p *SourceEventProcessor) processOrder(ctx context.Context, event SourceEve
 			}
 		}
 	}
-	if target2 > 0 && revenue >= target2 {
+	if valid && target2 > 0 && revenue >= target2 {
 		bonus, err := p.backend.LoadTarget2Bonus(ctx, job.OfficeID)
 		if err != nil {
 			return fmt.Errorf("load target 2 bonus: %w", err)
